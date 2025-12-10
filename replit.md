@@ -31,7 +31,8 @@ Ustaw zmienną środowiskową `PROXY_URL` aby używać proxy:
 ├── server/                 # Backend Node.js
 │   └── server.js           # WebSocket aggregator
 ├── public/                 # Static assets
-└── vite.config.ts          # Vite configuration
+├── vite.config.ts          # Vite configuration
+└── Webscoekt_public_all_exchanges/  # Complete project copy
 ```
 
 ## Environment Variables
