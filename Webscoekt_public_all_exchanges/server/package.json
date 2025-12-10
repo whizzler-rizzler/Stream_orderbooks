@@ -1,0 +1,20 @@
+{
+  "name": "crypto-aggregator-server",
+  "version": "1.0.0",
+  "description": "WebSocket server for crypto data streaming with proxy support",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "https-proxy-agent": "^7.0.4",
+    "socks-proxy-agent": "^8.0.2",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

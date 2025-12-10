@@ -54,5 +54,10 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 39705
-externalPort = 3000
+localPort = 40161
+externalPort = 3002
+
+[userenv]
+
+[userenv.shared]
+PROXY_URL = "http://ilbefxoi:mhaamz128dg0@167.100.107.11:6580"
