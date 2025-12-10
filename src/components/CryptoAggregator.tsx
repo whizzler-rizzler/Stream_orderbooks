@@ -54,8 +54,9 @@ const CryptoAggregator = () => {
   const connectWebSocket = () => {
     try {
       setConnectionStatus('connecting');
-      const projectId = 'ujtavgmgeefutsadbyzv';
-      const ws = new WebSocket(`wss://${projectId}.supabase.co/functions/v1/crypto-aggregator`);
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsHost = window.location.host;
+      const ws = new WebSocket(`${wsProtocol}//${wsHost}/ws`);
       
       ws.onopen = () => {
         console.log('Connected to aggregator');

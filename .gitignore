@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.pythonlibs/
+__pycache__/
+*.pyc
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.cache/
+.upm/
+ws-trader-pulse/
+fetch_repo.py
