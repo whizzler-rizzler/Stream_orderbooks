@@ -9,7 +9,7 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 - **Paradex**: 108 markets (PERP), **orderbook działający** (inserts format with mid price fallback) ✓
 - **Reya**: 85 markets, $148M volume, **dynamic depth subscription** (subskrybuje depth gdy otrzyma listę z /v2/prices)
 - **Pacifica**: $1.0B+ volume, 50 markets, **dynamic market loading** z API
-- **GRVT**: Not working - API requires specific JSON-RPC format (error 1107)
+- **GRVT**: Not working - **wymaga API key** i uwierzytelnienia przez `/auth/api_key/login` endpoint
 
 ## Architecture
 
@@ -75,7 +75,11 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 2. Frontend: `npm run dev`
 
 ## Recent Changes (2026-02-02)
+- Added Volume column with sorting by Symbol/Volume
 - Fixed Lighter orderbook flickering by sorting bids/asks and skipping unchanged values
 - Changed Extended to use `/v1/orderbooks` endpoint with SNAPSHOT/DELTA handling
 - Fixed Paradex orderbook to parse inserts array with side: BUY/SELL format
 - Fixed Paradex subscription to use `order_book.{market}.snapshot@15@100ms` format
+- Pacifica: dynamic market loading from `/api/v1/info/prices` (50 markets)
+- Reya: dynamic depth subscription for all markets from `/v2/prices`
+- Frontend: improved data merging to prevent NaN and maintain values

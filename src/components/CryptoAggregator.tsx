@@ -53,7 +53,7 @@ const CryptoAggregator = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [exchangeFilter, setExchangeFilter] = useState<'all' | ExchangeName>('all');
   const [sortConfig, setSortConfig] = useState<{
-    key: 'symbol' | 'price' | 'spread';
+    key: 'symbol' | 'price' | 'spread' | 'volume';
     direction: 'asc' | 'desc';
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -219,6 +219,21 @@ const CryptoAggregator = () => {
             ? symbolA.localeCompare(symbolB)
             : symbolB.localeCompare(symbolA);
         }
+        if (key === 'price') {
+          const priceA = Math.max(...EXCHANGES.map(ex => parseFloat(groupA[ex]?.price || '0')));
+          const priceB = Math.max(...EXCHANGES.map(ex => parseFloat(groupB[ex]?.price || '0')));
+          return direction === 'asc' ? priceA - priceB : priceB - priceA;
+        }
+        if (key === 'volume') {
+          const volA = EXCHANGES.reduce((sum, ex) => sum + parseFloat(groupA[ex]?.volume || '0'), 0);
+          const volB = EXCHANGES.reduce((sum, ex) => sum + parseFloat(groupB[ex]?.volume || '0'), 0);
+          return direction === 'asc' ? volA - volB : volB - volA;
+        }
+        if (key === 'spread') {
+          const spreadA = Math.min(...EXCHANGES.map(ex => parseFloat(groupA[ex]?.spread || '999999')).filter(s => s < 999999));
+          const spreadB = Math.min(...EXCHANGES.map(ex => parseFloat(groupB[ex]?.spread || '999999')).filter(s => s < 999999));
+          return direction === 'asc' ? spreadA - spreadB : spreadB - spreadA;
+        }
         return 0;
       });
     } else {
@@ -228,11 +243,11 @@ const CryptoAggregator = () => {
     return entries;
   })();
 
-  const handleSort = (key: 'symbol' | 'price' | 'spread') => {
+  const handleSort = (key: 'symbol' | 'price' | 'spread' | 'volume') => {
     setSortConfig((prev) =>
       prev && prev.key === key
         ? { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' }
-        : { key, direction: 'asc' }
+        : { key, direction: 'desc' }
     );
   };
 
@@ -313,7 +328,13 @@ const CryptoAggregator = () => {
                         className="font-bold text-foreground w-[80px] sticky left-0 bg-card z-10 cursor-pointer"
                         onClick={() => handleSort('symbol')}
                       >
-                        Symbol ↕
+                        Symbol {sortConfig?.key === 'symbol' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+                      </TableHead>
+                      <TableHead
+                        className="font-bold text-foreground w-[100px] cursor-pointer text-right"
+                        onClick={() => handleSort('volume')}
+                      >
+                        Volume {sortConfig?.key === 'volume' ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
                       </TableHead>
                       {EXCHANGES.map(exchange => (
                         <TableHead 
@@ -327,6 +348,7 @@ const CryptoAggregator = () => {
                     </TableRow>
                     <TableRow className="border-border hover:bg-transparent text-xs">
                       <TableHead className="sticky left-0 bg-card z-10"></TableHead>
+                      <TableHead className="text-xs text-muted-foreground text-right">24h</TableHead>
                       {EXCHANGES.map(exchange => (
                         <TableHead key={`${exchange}-cols`} colSpan={4} className="p-0">
                           <div className="grid grid-cols-4">
@@ -342,39 +364,45 @@ const CryptoAggregator = () => {
                   <TableBody>
                     {filteredSymbols.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={1 + EXCHANGES.length * 4} className="text-center py-8 text-muted-foreground">
+                        <TableCell colSpan={2 + EXCHANGES.length * 4} className="text-center py-8 text-muted-foreground">
                           Oczekiwanie na dane...
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredSymbols.map(([symbol, group]) => (
-                        <TableRow key={symbol} className="border-border hover:bg-muted/5">
-                          <TableCell className="font-bold text-foreground sticky left-0 bg-card z-10 text-sm">
-                            {symbol}
-                          </TableCell>
-                          {EXCHANGES.map(exchange => {
-                            const data = group[exchange];
-                            return (
-                              <TableCell key={`${symbol}-${exchange}`} colSpan={4} className="p-0">
-                                <div className="grid grid-cols-4">
-                                  <span className={`${EXCHANGE_COLORS[exchange]} font-mono text-xs px-2 py-2`}>
-                                    {data ? `$${formatPrice(data.price)}` : '-'}
-                                  </span>
-                                  <span className="text-green-300 font-mono text-xs px-2 py-2">
-                                    {data?.bestBid ? `$${formatPrice(data.bestBid)}` : '-'}
-                                  </span>
-                                  <span className="text-red-300 font-mono text-xs px-2 py-2">
-                                    {data?.bestAsk ? `$${formatPrice(data.bestAsk)}` : '-'}
-                                  </span>
-                                  <span className="text-yellow-300 text-xs px-2 py-2">
-                                    {data?.spread ? `$${data.spread}` : '-'}
-                                  </span>
-                                </div>
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-                      ))
+                      filteredSymbols.map(([symbol, group]) => {
+                        const totalVolume = EXCHANGES.reduce((sum, ex) => sum + parseFloat(group[ex]?.volume || '0'), 0);
+                        return (
+                          <TableRow key={symbol} className="border-border hover:bg-muted/5">
+                            <TableCell className="font-bold text-foreground sticky left-0 bg-card z-10 text-sm">
+                              {symbol}
+                            </TableCell>
+                            <TableCell className="text-right text-xs text-muted-foreground font-mono">
+                              {totalVolume > 0 ? formatVolume(totalVolume) : '-'}
+                            </TableCell>
+                            {EXCHANGES.map(exchange => {
+                              const data = group[exchange];
+                              return (
+                                <TableCell key={`${symbol}-${exchange}`} colSpan={4} className="p-0">
+                                  <div className="grid grid-cols-4">
+                                    <span className={`${EXCHANGE_COLORS[exchange]} font-mono text-xs px-2 py-2`}>
+                                      {data?.price ? `$${formatPrice(data.price)}` : '-'}
+                                    </span>
+                                    <span className="text-green-300 font-mono text-xs px-2 py-2">
+                                      {data?.bestBid ? `$${formatPrice(data.bestBid)}` : '-'}
+                                    </span>
+                                    <span className="text-red-300 font-mono text-xs px-2 py-2">
+                                      {data?.bestAsk ? `$${formatPrice(data.bestAsk)}` : '-'}
+                                    </span>
+                                    <span className="text-yellow-300 text-xs px-2 py-2">
+                                      {data?.spread ? `$${data.spread}` : '-'}
+                                    </span>
+                                  </div>
+                                </TableCell>
+                              );
+                            })}
+                          </TableRow>
+                        );
+                      })
                     )}
                   </TableBody>
                 </Table>
