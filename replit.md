@@ -7,9 +7,9 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 - **Lighter**: $5.2B+ volume, 102 markets, **pełny BID/ASK orderbook** ✓
 - **Extended**: 79 markets, **orderbook działający** (SNAPSHOT + DELTA) ✓
 - **Paradex**: 108 markets (PERP), **orderbook działający** (inserts format with mid price fallback) ✓
-- **Reya**: 85 markets, $148M volume, **dynamic depth subscription** (subskrybuje depth gdy otrzyma listę z /v2/prices)
+- **GRVT**: 82 markets, **pełny BID/ASK z mini ticker** ✓ (uwierzytelnienie przez API key)
+- **Reya**: 85 markets, $148M volume, **tylko ceny** (WebSocket API nie udostępnia orderbook)
 - **Pacifica**: $1.0B+ volume, 50 markets, **dynamic market loading** z API
-- **GRVT**: Not working - **wymaga API key** i uwierzytelnienia przez `/auth/api_key/login` endpoint
 
 ## Architecture
 

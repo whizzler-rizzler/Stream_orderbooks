@@ -1,5 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import http from 'http';
+import https from 'https';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
@@ -925,39 +926,160 @@ function connectParadex() {
   exchangeSockets.set('paradex', ws);
 }
 
-function connectGrvt() {
+async function grvtFetchInstruments() {
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({});
+    const agent = getProxyAgent('grvt');
+    
+    const options = {
+      hostname: 'market-data.grvt.io',
+      port: 443,
+      path: '/full/v1/instruments',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    if (agent) options.agent = agent;
+    
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          const instruments = json.result?.map(i => i.instrument) || [];
+          console.log(`GRVT: Fetched ${instruments.length} instruments from API`);
+          resolve(instruments);
+        } catch (e) {
+          console.error('GRVT: Failed to parse instruments', e.message);
+          resolve([]);
+        }
+      });
+    });
+    
+    req.on('error', (error) => {
+      console.error('GRVT: Instruments fetch error', error.message);
+      resolve([]);
+    });
+    
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function grvtLogin() {
+  const apiKey = process.env.Grvt_api_key;
+  const secret = process.env.GRVT_secret;
+  
+  if (!apiKey) {
+    console.error('GRVT: Missing API key');
+    return null;
+  }
+  
+  return new Promise((resolve) => {
+    const postData = JSON.stringify({ api_key: apiKey });
+    const agent = getProxyAgent('grvt');
+    
+    const options = {
+      hostname: 'edge.grvt.io',
+      port: 443,
+      path: '/auth/api_key/login',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+        'Cookie': 'rm=true;'
+      }
+    };
+    if (agent) options.agent = agent;
+    
+    const req = https.request(options, (res) => {
+      let data = '';
+      const cookies = res.headers['set-cookie'] || [];
+      const gravityCookie = cookies.find(c => c.startsWith('gravity='));
+      const accountId = res.headers['x-grvt-account-id'];
+      
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (gravityCookie && accountId) {
+          console.log(`GRVT: Logged in successfully, account: ${accountId}`);
+          resolve({ cookie: gravityCookie.split(';')[0], accountId });
+        } else {
+          console.error('GRVT: Login failed - missing cookie or account ID');
+          console.error('GRVT: Response:', data);
+          resolve(null);
+        }
+      });
+    });
+    
+    req.on('error', (error) => {
+      console.error('GRVT: Login error', error.message);
+      resolve(null);
+    });
+    
+    req.write(postData);
+    req.end();
+  });
+}
+
+async function connectGrvt() {
+  const instruments = await grvtFetchInstruments();
+  const auth = await grvtLogin();
+  
   const agent = getProxyAgent('grvt');
-  const options = {
-    headers: {
-      'Origin': 'https://grvt.io',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
+  const headers = {
+    'Origin': 'https://grvt.io',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
   };
+  
+  if (auth) {
+    headers['Cookie'] = auth.cookie;
+    headers['X-Grvt-Account-Id'] = auth.accountId;
+  }
+  
+  const options = { headers };
   if (agent) options.agent = agent;
   
-  console.log('GRVT: Connecting...');
+  console.log('GRVT: Connecting to WebSocket...');
   const ws = new WebSocket(EXCHANGES.grvt.url, options);
   
   ws.on('open', () => {
     console.log('GRVT: Connected');
     
-    // Try exact doc format with only required fields
+    const markets = instruments.length > 0 ? instruments : [
+      'BTC_USDT_Perp', 'ETH_USDT_Perp', 'SOL_USDT_Perp'
+    ];
+    
+    const feedMini = markets.map(m => `${m}@500`);
+    
     ws.send(JSON.stringify({
-      stream: 'v1.mini.s',
-      feed: ['BTC_USDT_Perp@500', 'ETH_USDT_Perp@500', 'SOL_USDT_Perp@500'],
+      jsonrpc: '2.0',
+      id: 1,
       method: 'subscribe',
-      is_full: true
+      params: {
+        stream: 'v1.mini.s',
+        selectors: feedMini
+      }
     }));
     
-    console.log(`GRVT: Subscribed to 3 markets (mini ticker)`);
+    console.log(`GRVT: Subscribed to ${markets.length} markets (mini ticker with bid/ask)`);
   });
   
   ws.on('message', (rawData) => {
     try {
       const data = JSON.parse(rawData.toString());
       
+      // Debug first few messages
+      if (!global.grvtMsgCount) global.grvtMsgCount = 0;
+      if (global.grvtMsgCount < 5) {
+        console.log('GRVT msg:', JSON.stringify(data).substring(0, 400));
+        global.grvtMsgCount++;
+      }
+      
       // Log subscription responses for debugging
-      if (data.subs || data.unsubs) {
+      if (data.result?.subs || data.result?.unsubs) {
         console.log('GRVT: Subscription response:', JSON.stringify(data));
         return;
       }
@@ -972,7 +1094,7 @@ function connectGrvt() {
         return;
       }
       
-      // Handle mini ticker stream
+      // Handle mini ticker stream - includes bid/ask data
       if (data.stream === 'v1.mini.s' && data.feed) {
         const feed = data.feed;
         const selector = data.selector;
@@ -995,7 +1117,12 @@ function connectGrvt() {
         }
         previousPrices.set(cacheKey, price);
         
-        const existingOrderbook = orderbookCache.get(cacheKey) || {};
+        // Extract bid/ask from mini ticker (already included!)
+        const bestBid = parseFloat(feed.best_bid_price || 0);
+        const bestAsk = parseFloat(feed.best_ask_price || 0);
+        const bidSize = feed.best_bid_size;
+        const askSize = feed.best_ask_size;
+        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
         
         const priceData = {
           exchange: 'GRVT',
@@ -1003,11 +1130,11 @@ function connectGrvt() {
           price: price.toString(),
           timestamp: Date.now(),
           priceChange,
-          bestBid: existingOrderbook.bestBid,
-          bestAsk: existingOrderbook.bestAsk,
-          bidSize: existingOrderbook.bidSize,
-          askSize: existingOrderbook.askSize,
-          spread: existingOrderbook.spread
+          bestBid: bestBid ? bestBid.toString() : null,
+          bestAsk: bestAsk ? bestAsk.toString() : null,
+          bidSize: bidSize?.toString(),
+          askSize: askSize?.toString(),
+          spread
         };
         
         priceCache.set(cacheKey, priceData);
@@ -1099,7 +1226,6 @@ function connectReya() {
   
   console.log('Reya: Connecting...');
   const ws = new WebSocket(EXCHANGES.reya.url, options);
-  const reyaSubscribedDepths = new Set();
   
   ws.on('open', () => {
     console.log('Reya: Connected');
@@ -1114,17 +1240,12 @@ function connectReya() {
       channel: '/v2/markets/summary'
     }));
     
-    console.log(`Reya: Subscribed to prices and markets summary, waiting for market list to subscribe depths...`);
+    console.log(`Reya: Subscribed to prices and markets summary (orderbook not available via WebSocket)`);
   });
   
-  function subscribeToDepth(symbol) {
-    if (reyaSubscribedDepths.has(symbol)) return;
-    reyaSubscribedDepths.add(symbol);
-    ws.send(JSON.stringify({
-      type: 'subscribe',
-      channel: `/v2/market/${symbol}/depth`
-    }));
-  }
+  // Note: Reya WebSocket API V2 does NOT support depth/orderbook channels
+  // Their orderbook is onchain and not exposed via WebSocket
+  // Only price and summary data is available
   
   ws.on('message', (rawData) => {
     try {
@@ -1140,9 +1261,6 @@ function connectReya() {
         
         prices.forEach((item) => {
           if (!item.symbol) return;
-          
-          // Subscribe to depth for this symbol dynamically
-          subscribeToDepth(item.symbol);
           
           const oraclePrice = parseFloat(item.oraclePrice || item.poolPrice || 0);
           if (!oraclePrice || oraclePrice <= 0) return;
@@ -1195,54 +1313,8 @@ function connectReya() {
         });
       }
       
-      // Handle depth (orderbook) channel
-      if (data.type === 'channel_data' && data.channel && data.channel.includes('/depth')) {
-        const item = data.data;
-        
-        
-        if (!item) return;
-        
-        // Symbol might be in item or in channel
-        const symbol = item.symbol || data.channel.split('/')[3]?.split('/')[0];
-        if (!symbol) return;
-        
-        const normalizedSymbol = normalizeSymbol(symbol);
-        const cacheKey = `reya_${normalizedSymbol}`;
-        
-        const bids = item.bids || [];
-        const asks = item.asks || [];
-        
-        const bestBid = bids.length > 0 ? parseFloat(bids[0].px) : null;
-        const bestAsk = asks.length > 0 ? parseFloat(asks[0].px) : null;
-        const bidSize = bids.length > 0 ? bids[0].qty : null;
-        const askSize = asks.length > 0 ? asks[0].qty : null;
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
-        
-        const orderbookData = {
-          bestBid: bestBid?.toString(),
-          bestAsk: bestAsk?.toString(),
-          bidSize,
-          askSize,
-          spread
-        };
-        
-        orderbookCache.set(cacheKey, orderbookData);
-        
-        const existingPrice = priceCache.get(cacheKey);
-        if (existingPrice) {
-          const updatedData = { ...existingPrice, ...orderbookData };
-          priceCache.set(cacheKey, updatedData);
-          broadcast(updatedData);
-        } else {
-          // Broadcast orderbook-only update if no price exists yet
-          broadcastOrderbook({
-            exchange: 'Reya',
-            symbol: normalizedSymbol,
-            ...orderbookData,
-            timestamp: Date.now()
-          });
-        }
-      }
+      // Note: Reya WebSocket API V2 does not support depth/orderbook channels
+      // Orderbook data is not available via WebSocket - only REST API polling would work
     } catch (error) {
       console.error('Reya: Parse error', error.message);
     }
