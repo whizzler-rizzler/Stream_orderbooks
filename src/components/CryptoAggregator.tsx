@@ -79,7 +79,6 @@ const CryptoAggregator = () => {
       ws.onmessage = (event) => {
         try {
           const data: PriceData = JSON.parse(event.data);
-          if (data.type === 'orderbook') return;
           setPrices(prev => {
             const newPrices = new Map(prev);
             const key = `${data.exchange}_${data.symbol}`;
@@ -93,9 +92,13 @@ const CryptoAggregator = () => {
               timestamp: Date.now()
             };
             
-            // Only update fields if new value is valid (not null, undefined, empty, or "-")
-            const isValid = (val: string | undefined) => 
-              val !== undefined && val !== null && val !== '' && val !== '-' && val !== 'undefined';
+            // Only update fields if new value is valid (not null, undefined, empty, "-", or NaN)
+            const isValid = (val: string | undefined) => {
+              if (val === undefined || val === null || val === '' || val === '-') return false;
+              if (val === 'undefined' || val === 'NaN' || val === 'null') return false;
+              const num = parseFloat(val);
+              return !isNaN(num) && isFinite(num);
+            };
             
             if (isValid(data.price)) merged.price = data.price;
             if (isValid(data.bestBid)) merged.bestBid = data.bestBid;

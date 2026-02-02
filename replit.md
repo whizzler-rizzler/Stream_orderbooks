@@ -4,11 +4,11 @@
 Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych giełd kryptowalut z obsługą dedykowanych proxy per-exchange oraz danymi orderbook (BID/ASK/Spread).
 
 ## Current Status (February 2026)
-- **Lighter**: $5.2B+ volume, 100+ markets, **pełny BID/ASK orderbook** ✓
+- **Lighter**: $5.2B+ volume, 102 markets, **pełny BID/ASK orderbook** ✓
 - **Extended**: 79 markets, **orderbook działający** (SNAPSHOT + DELTA) ✓
-- **Paradex**: 108 markets (filtered to PERP), **orderbook działający** (inserts format) ✓
-- **Reya**: 85 markets, depth subscriptions - brak danych (channel może nie zwracać depth)
-- **Pacifica**: $1.0B+ volume, 50+ markets, book source configured
+- **Paradex**: 108 markets (PERP), **orderbook działający** (inserts format with mid price fallback) ✓
+- **Reya**: 85 markets, $148M volume, **dynamic depth subscription** (subskrybuje depth gdy otrzyma listę z /v2/prices)
+- **Pacifica**: $1.0B+ volume, 50 markets, **dynamic market loading** z API
 - **GRVT**: Not working - API requires specific JSON-RPC format (error 1107)
 
 ## Architecture

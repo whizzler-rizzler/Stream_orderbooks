@@ -34,6 +34,7 @@ const EXCHANGES = {
   },
   pacifica: {
     url: 'wss://ws.pacifica.fi/ws',
+    marketsUrl: 'https://api.pacifica.fi/api/v1/info/markets',
     name: 'Pacifica',
     proxyEnv: 'Proxy_pacifica_public',
     allowNoProxy: true,
@@ -65,7 +66,7 @@ const REYA_MARKETS = [
   'XRPRUSDPERP', 'DOGERUSDPERP', 'SUIRUSDPERP', 'LINKRUSDPERP'
 ];
 
-const PACIFICA_MARKETS = ['BTC', 'ETH', 'SOL', 'AVAX', 'SUI', 'ARB', 'OP', 'LINK'];
+let pacificaMarkets = ['BTC', 'ETH', 'SOL', 'AVAX', 'SUI', 'ARB', 'OP', 'LINK'];
 
 // Extended markets for orderbook subscription
 const EXTENDED_MARKETS = [
@@ -234,6 +235,27 @@ async function fetchParadexMarkets() {
   } catch (error) {
     console.error('Paradex: Error fetching markets:', error.message);
     return [];
+  }
+}
+
+async function fetchPacificaMarkets() {
+  try {
+    console.log('Pacifica: Fetching markets from prices endpoint...');
+    const response = await fetch('https://api.pacifica.fi/api/v1/info/prices');
+    if (!response.ok) {
+      console.error(`Pacifica: API returned ${response.status}`);
+      return pacificaMarkets;
+    }
+    const data = await response.json();
+    if (data && data.success && data.data && Array.isArray(data.data)) {
+      const markets = data.data.map((m) => m.symbol).filter(Boolean);
+      console.log(`Pacifica: Loaded ${markets.length} markets`);
+      return markets;
+    }
+    return pacificaMarkets;
+  } catch (error) {
+    console.error('Pacifica: Error fetching markets:', error.message);
+    return pacificaMarkets;
   }
 }
 
@@ -846,12 +868,19 @@ function connectParadex() {
             priceCache.set(cacheKey, updatedData);
             broadcast(updatedData);
           } else {
-            broadcastOrderbook({
-              exchange: 'Paradex',
-              symbol: normalizedSymbol,
-              ...orderbookData,
-              timestamp: Date.now()
-            });
+            // Calculate mid price from orderbook
+            const midPrice = bestBid && bestAsk ? ((bestBid + bestAsk) / 2) : (bestBid || bestAsk);
+            if (midPrice) {
+              const priceData = {
+                exchange: 'Paradex',
+                symbol: normalizedSymbol,
+                price: midPrice.toString(),
+                timestamp: Date.now(),
+                ...orderbookData
+              };
+              priceCache.set(cacheKey, priceData);
+              broadcast(priceData);
+            }
           }
         }
         
@@ -1070,6 +1099,7 @@ function connectReya() {
   
   console.log('Reya: Connecting...');
   const ws = new WebSocket(EXCHANGES.reya.url, options);
+  const reyaSubscribedDepths = new Set();
   
   ws.on('open', () => {
     console.log('Reya: Connected');
@@ -1084,16 +1114,17 @@ function connectReya() {
       channel: '/v2/markets/summary'
     }));
     
-    // Subscribe to orderbook depth for each market
-    REYA_MARKETS.forEach((symbol) => {
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        channel: `/v2/market/${symbol}/depth`
-      }));
-    });
-    
-    console.log(`Reya: Subscribed to prices, markets summary, and ${REYA_MARKETS.length} orderbook depths`);
+    console.log(`Reya: Subscribed to prices and markets summary, waiting for market list to subscribe depths...`);
   });
+  
+  function subscribeToDepth(symbol) {
+    if (reyaSubscribedDepths.has(symbol)) return;
+    reyaSubscribedDepths.add(symbol);
+    ws.send(JSON.stringify({
+      type: 'subscribe',
+      channel: `/v2/market/${symbol}/depth`
+    }));
+  }
   
   ws.on('message', (rawData) => {
     try {
@@ -1109,6 +1140,9 @@ function connectReya() {
         
         prices.forEach((item) => {
           if (!item.symbol) return;
+          
+          // Subscribe to depth for this symbol dynamically
+          subscribeToDepth(item.symbol);
           
           const oraclePrice = parseFloat(item.oraclePrice || item.poolPrice || 0);
           if (!oraclePrice || oraclePrice <= 0) return;
@@ -1247,7 +1281,7 @@ function connectPacifica() {
   ws.on('open', () => {
     console.log('Pacifica: Connected');
     
-    PACIFICA_MARKETS.forEach((symbol) => {
+    pacificaMarkets.forEach((symbol) => {
       ws.send(JSON.stringify({
         method: 'subscribe',
         params: {
@@ -1267,7 +1301,7 @@ function connectPacifica() {
       }));
     });
     
-    console.log(`Pacifica: Subscribed to ${PACIFICA_MARKETS.length} markets (prices + book)`);
+    console.log(`Pacifica: Subscribed to ${pacificaMarkets.length} markets (prices + book)`);
     
     pingInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
@@ -1415,6 +1449,7 @@ wss.on('connection', (ws) => {
 
 async function start() {
   paradexMarkets = await fetchParadexMarkets();
+  pacificaMarkets = await fetchPacificaMarkets();
   
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
