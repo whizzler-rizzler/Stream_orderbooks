@@ -83,7 +83,32 @@ const CryptoAggregator = () => {
           setPrices(prev => {
             const newPrices = new Map(prev);
             const key = `${data.exchange}_${data.symbol}`;
-            newPrices.set(key, data);
+            const existing = prev.get(key);
+            
+            // Merge new data with existing - only overwrite if new value is valid
+            const merged: PriceData = existing ? { ...existing } : {
+              exchange: data.exchange,
+              symbol: data.symbol,
+              price: '',
+              timestamp: Date.now()
+            };
+            
+            // Only update fields if new value is valid (not null, undefined, empty, or "-")
+            const isValid = (val: string | undefined) => 
+              val !== undefined && val !== null && val !== '' && val !== '-' && val !== 'undefined';
+            
+            if (isValid(data.price)) merged.price = data.price;
+            if (isValid(data.bestBid)) merged.bestBid = data.bestBid;
+            if (isValid(data.bestAsk)) merged.bestAsk = data.bestAsk;
+            if (isValid(data.spread)) merged.spread = data.spread;
+            if (isValid(data.bidSize)) merged.bidSize = data.bidSize;
+            if (isValid(data.askSize)) merged.askSize = data.askSize;
+            if (isValid(data.volume)) merged.volume = data.volume;
+            if (isValid(data.priceChange)) merged.priceChange = data.priceChange;
+            if (isValid(data.fundingRate)) merged.fundingRate = data.fundingRate;
+            if (data.timestamp) merged.timestamp = data.timestamp;
+            
+            newPrices.set(key, merged);
             return newPrices;
           });
         } catch (error) {
