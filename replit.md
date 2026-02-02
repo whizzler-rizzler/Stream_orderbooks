@@ -4,13 +4,12 @@
 Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych giełd kryptowalut z obsługą dedykowanych proxy per-exchange oraz danymi orderbook (BID/ASK/Spread).
 
 ## Current Status (February 2026)
-- **5/6 giełd operacyjnych z danymi cenowymi**
 - **Lighter**: $5.2B+ volume, 100+ markets, **pełny BID/ASK orderbook** ✓
-- **Extended**: 79 markets (orderbook connections established)
-- **Paradex**: 108 markets (filtered to PERP), orderbook subscribed
-- **Reya**: 85 markets, depth subscriptions added
+- **Extended**: 79 markets, **orderbook działający** (SNAPSHOT + DELTA) ✓
+- **Paradex**: 108 markets (filtered to PERP), **orderbook działający** (inserts format) ✓
+- **Reya**: 85 markets, depth subscriptions - brak danych (channel może nie zwracać depth)
 - **Pacifica**: $1.0B+ volume, 50+ markets, book source configured
-- **GRVT**: Not working - API requires specific JSON-RPC format
+- **GRVT**: Not working - API requires specific JSON-RPC format (error 1107)
 
 ## Architecture
 
@@ -28,12 +27,11 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 
 | Exchange | WebSocket URL | Orderbook Status |
 |----------|---------------|------------------|
-| Lighter | wss://mainnet.zklighter.elliot.ai/stream | ✓ Working |
-| Extended | wss://api.starknet.extended.exchange/stream.extended.exchange/v1/prices/mark | Implemented |
-| Extended OB | wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbook/{market} | Awaiting data |
-| Paradex | wss://ws.api.prod.paradex.trade/v1 | Subscribed |
-| GRVT | wss://market-data.grvt.io/ws/full | Error 1107 |
-| Reya | wss://ws.reya.xyz | /v2/market/{symbol}/depth added |
+| Lighter | wss://mainnet.zklighter.elliot.ai/stream | ✓ Working - sorted bids/asks |
+| Extended | wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks | ✓ Working - SNAPSHOT/DELTA |
+| Paradex | wss://ws.api.prod.paradex.trade/v1 | ✓ Working - inserts format |
+| GRVT | wss://market-data.grvt.io/ws/full | ✗ Error 1107 |
+| Reya | wss://ws.reya.xyz | Subscribed, no depth data |
 | Pacifica | wss://ws.pacifica.fi/ws | source: 'book' configured |
 
 ## Project Structure
@@ -61,24 +59,23 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 Supports format: `host:port:user:pass` which is converted to `http://user:pass@host:port`
 
 ## Known Issues
-1. **GRVT**: Subscription format returns error 1107 "JSON RPC version must be 2.0" - API requires specific format that needs investigation with their docs/support
-2. **Extended Orderbook**: WebSocket connections established but no data received - may require authentication or different URL format
-3. **Reya Orderbook**: Depth channel added but data visibility needs verification
+1. **GRVT**: Subscription format returns error 1107 "JSON RPC version must be 2.0" - API requires specific format
+2. **Reya**: Depth channel subscribed but no data received - may need different channel format
+3. **Pacifica**: Book source configured but orderbook data not visible in UI
 
 ## Orderbook Implementation Details
-- **Lighter**: `order_book/{market_id}` channel - bids[0].price/asks[0].price
-- **Extended**: `/v1/orderbook/{market}` separate WebSocket per market - data.bids/data.asks
-- **Paradex**: `order_book.{market}` channel - bids[0][0]/asks[0][0]
-- **Reya**: `/v2/market/{symbol}/depth` channel - bids[0].px/asks[0].px
-- **Pacifica**: `source: 'book'` with agg_level=1 - data.l[0]/data.l[1]
+- **Lighter**: `order_book/{market_id}` channel - sorted bids/asks, skip unchanged values
+- **Extended**: `/v1/orderbooks` single endpoint - SNAPSHOT clears state, DELTA updates incrementally
+- **Paradex**: `order_book.{market}.snapshot@15@100ms` channel - inserts array with side: BUY/SELL
+- **Reya**: `/v2/market/{symbol}/depth` channel - bids[0].px/asks[0].px format
+- **Pacifica**: `source: 'book'` with agg_level=1 - data.l[0] for bids, data.l[1] for asks
 
 ## Running
 1. Backend: `cd server && node server.js`
 2. Frontend: `npm run dev`
 
 ## Recent Changes (2026-02-02)
-- Implemented per-exchange orderbook subscriptions
-- Added Extended orderbook via separate WebSocket connections
-- Fixed Pacifica to use 'book' source per API docs
-- Added Reya depth subscriptions for 8 markets
-- GRVT subscription format investigation ongoing
+- Fixed Lighter orderbook flickering by sorting bids/asks and skipping unchanged values
+- Changed Extended to use `/v1/orderbooks` endpoint with SNAPSHOT/DELTA handling
+- Fixed Paradex orderbook to parse inserts array with side: BUY/SELL format
+- Fixed Paradex subscription to use `order_book.{market}.snapshot@15@100ms` format

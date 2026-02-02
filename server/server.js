@@ -326,11 +326,23 @@ function connectLighter() {
         const bids = data.order_book.bids || [];
         const asks = data.order_book.asks || [];
         
-        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : null;
-        const bestAsk = asks.length > 0 ? parseFloat(asks[0].price) : null;
-        const bidSize = bids.length > 0 ? bids[0].size : null;
-        const askSize = asks.length > 0 ? asks[0].size : null;
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        // Sort bids descending and asks ascending to get true best prices
+        const sortedBids = [...bids].sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+        const sortedAsks = [...asks].sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+        
+        const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0].price) : null;
+        const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : null;
+        const bidSize = sortedBids.length > 0 ? sortedBids[0].size : null;
+        const askSize = sortedAsks.length > 0 ? sortedAsks[0].size : null;
+        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+        
+        // Only update if values actually changed to prevent flickering
+        const existingOB = orderbookCache.get(cacheKey);
+        if (existingOB && 
+            existingOB.bestBid === bestBid?.toString() && 
+            existingOB.bestAsk === bestAsk?.toString()) {
+          return; // No change, skip broadcast
+        }
         
         const orderbookData = {
           bestBid: bestBid?.toString(),
@@ -468,103 +480,135 @@ function connectExtendedOrderbook() {
   };
   if (agent) baseOptions.agent = agent;
   
-  console.log(`Extended Orderbook: Connecting to ${EXTENDED_MARKETS.length} markets...`);
+  // Use single orderbooks endpoint (plural) as per attached code reference
+  const orderbookUrl = 'wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks';
+  console.log(`Extended Orderbook: Connecting to ${orderbookUrl}...`);
   
-  EXTENDED_MARKETS.forEach((market) => {
-    const orderbookUrl = `wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbook/${market}`;
-    const ws = new WebSocket(orderbookUrl, { ...baseOptions });
-    
-    ws.on('open', () => {
-      // Extended orderbook stream auto-subscribes on connect
-    });
-    
-    ws.on('message', (rawData) => {
-      try {
-        const lines = rawData.toString().split('\n');
-        
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          
-          const data = JSON.parse(line);
-          
-          // Extended orderbook format: type: 'OB' with bids/asks
-          if (data.type === 'OB' && data.data) {
-            const marketName = data.data.m || data.data.market || market;
-            const normalizedSymbol = normalizeSymbol(marketName);
-            const cacheKey = `extended_${normalizedSymbol}`;
-            
-            const bids = data.data.bids || data.data.b || [];
-            const asks = data.data.asks || data.data.a || [];
-            
-            // Extended format: [[price, size], ...] or [{p, s}, ...]
-            const getPrice = (levels) => {
-              if (!levels || levels.length === 0) return null;
-              const first = levels[0];
-              if (Array.isArray(first)) return parseFloat(first[0]);
-              return parseFloat(first.p || first.price || 0);
-            };
-            
-            const getSize = (levels) => {
-              if (!levels || levels.length === 0) return null;
-              const first = levels[0];
-              if (Array.isArray(first)) return first[1];
-              return first.s || first.size;
-            };
-            
-            const bestBid = getPrice(bids);
-            const bestAsk = getPrice(asks);
-            const bidSize = getSize(bids);
-            const askSize = getSize(asks);
-            const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
-            
-            const orderbookData = {
-              bestBid: bestBid?.toString(),
-              bestAsk: bestAsk?.toString(),
-              bidSize: bidSize?.toString(),
-              askSize: askSize?.toString(),
-              spread
-            };
-            
-            orderbookCache.set(cacheKey, orderbookData);
-            
-            const existingPrice = priceCache.get(cacheKey);
-            if (existingPrice) {
-              const updatedData = { ...existingPrice, ...orderbookData };
-              priceCache.set(cacheKey, updatedData);
-              broadcast(updatedData);
-            } else {
-              // Broadcast orderbook-only update if no price exists yet
-              broadcastOrderbook({
-                exchange: 'Extended',
-                symbol: normalizedSymbol,
-                ...orderbookData,
-                timestamp: Date.now()
-              });
-            }
-          }
-        }
-      } catch (error) {
-        // Silently ignore parse errors for individual orderbook connections
-      }
-    });
-    
-    ws.on('error', () => {});
-    
-    ws.on('close', () => {
-      setTimeout(() => {
-        // Reconnect individual orderbook
-        connectExtendedOrderbookMarket(market, baseOptions);
-      }, 5000);
-    });
-    
-    exchangeSockets.set(`extended_orderbook_${market}`, ws);
+  const ws = new WebSocket(orderbookUrl, { ...baseOptions });
+  let extMsgCount = 0;
+  
+  // Maintain orderbook state per market (for delta updates)
+  const extendedOrderbooks = new Map();
+  
+  ws.on('open', () => {
+    console.log('Extended Orderbook: Connected');
   });
   
-  console.log(`Extended Orderbook: Connected to ${EXTENDED_MARKETS.length} markets`);
+  ws.on('message', (rawData) => {
+    try {
+      const msg = JSON.parse(rawData.toString());
+      const data = msg.data || msg;
+      const symbol = data.m || msg.market || msg.symbol || data.market;
+      const msgType = msg.type || data.t; // SNAPSHOT or DELTA
+      
+      
+      if (!symbol) return;
+      
+      const normalizedSymbol = normalizeSymbol(symbol);
+      const cacheKey = `extended_${normalizedSymbol}`;
+      
+      // Get or create orderbook state for this market
+      if (!extendedOrderbooks.has(symbol)) {
+        extendedOrderbooks.set(symbol, { bids: new Map(), asks: new Map() });
+      }
+      const obState = extendedOrderbooks.get(symbol);
+      
+      const bidsArray = data.b || data.bids || [];
+      const asksArray = data.a || data.asks || [];
+      
+      // Process updates: format is [{p: "price", q: "quantity"}, ...]
+      // Negative quantity means remove, positive means add/update
+      if (msgType === 'SNAPSHOT') {
+        obState.bids.clear();
+        obState.asks.clear();
+      }
+      
+      for (const bid of bidsArray) {
+        const price = bid.p || bid.price;
+        const qty = parseFloat(bid.q || bid.size || 0);
+        if (qty <= 0) {
+          obState.bids.delete(price);
+        } else {
+          obState.bids.set(price, qty);
+        }
+      }
+      
+      for (const ask of asksArray) {
+        const price = ask.p || ask.price;
+        const qty = parseFloat(ask.q || ask.size || 0);
+        if (qty <= 0) {
+          obState.asks.delete(price);
+        } else {
+          obState.asks.set(price, qty);
+        }
+      }
+      
+      // Get best bid (highest price) and best ask (lowest price)
+      const sortedBids = [...obState.bids.entries()]
+        .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
+      const sortedAsks = [...obState.asks.entries()]
+        .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
+      
+      const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
+      const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
+      const bidSize = sortedBids.length > 0 ? sortedBids[0][1] : null;
+      const askSize = sortedAsks.length > 0 ? sortedAsks[0][1] : null;
+      
+      if (!bestBid && !bestAsk) return;
+      
+      const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+      
+      // Only broadcast if values changed
+      const existingOB = orderbookCache.get(cacheKey);
+      if (existingOB && 
+          existingOB.bestBid === bestBid?.toString() && 
+          existingOB.bestAsk === bestAsk?.toString()) {
+        return;
+      }
+      
+      const orderbookData = {
+        bestBid: bestBid?.toString(),
+        bestAsk: bestAsk?.toString(),
+        bidSize: bidSize?.toString(),
+        askSize: askSize?.toString(),
+        spread
+      };
+      
+      orderbookCache.set(cacheKey, orderbookData);
+      
+      const existingPrice = priceCache.get(cacheKey);
+      if (existingPrice) {
+        const updatedData = { ...existingPrice, ...orderbookData };
+        priceCache.set(cacheKey, updatedData);
+        broadcast(updatedData);
+      } else {
+        broadcastOrderbook({
+          exchange: 'Extended',
+          symbol: normalizedSymbol,
+          ...orderbookData,
+          timestamp: Date.now()
+        });
+      }
+    } catch (error) {
+      // Silently ignore parse errors
+    }
+  });
+  
+  ws.on('error', (err) => {
+    console.error('Extended Orderbook: Error', err.message);
+  });
+  
+  ws.on('close', () => {
+    console.log('Extended Orderbook: Disconnected, reconnecting in 5s...');
+    setTimeout(() => connectExtendedOrderbook(), 5000);
+  });
+  
+  exchangeSockets.set('extended_orderbook', ws);
 }
 
 function connectExtendedOrderbookMarket(market, baseOptions) {
-  const orderbookUrl = `wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbook/${market}`;
+  // This function is no longer used - single orderbooks endpoint handles all markets
+  const orderbookUrl = 'wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks';
   const ws = new WebSocket(orderbookUrl, { ...baseOptions });
   
   ws.on('message', (rawData) => {
@@ -661,6 +705,8 @@ function connectParadex() {
     };
     ws.send(JSON.stringify(summaryMsg));
     
+    // Subscribe to orderbook snapshots with proper channel format per docs:
+    // order_book.:market_symbol.:feed_type@15@:refresh_rate
     paradexMarkets.forEach((market, index) => {
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
@@ -668,15 +714,16 @@ function connectParadex() {
         params: { channel: `trades.${market}` },
         id: index + 2,
       }));
+      // Use snapshot feed type with 100ms refresh rate per documentation
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
-        params: { channel: `order_book.${market}` },
+        params: { channel: `order_book.${market}.snapshot@15@100ms` },
         id: index + 1000,
       }));
     });
     
-    console.log(`Paradex: Subscribed to ${paradexMarkets.length} markets (trades + orderbook)`);
+    console.log(`Paradex: Subscribed to ${paradexMarkets.length} markets (trades + orderbook snapshot)`);
   });
   
   ws.on('message', (rawData) => {
@@ -729,25 +776,65 @@ function connectParadex() {
           });
         }
         
+        // Handle orderbook: channel format is "order_book.{market}.snapshot@15@100ms"
         if (channel && channel.startsWith('order_book.')) {
-          const symbol = channel.replace('order_book.', '');
+          
+          // Extract symbol: "order_book.BTC-PERP.snapshot@15@100ms" -> "BTC-PERP"
+          const parts = channel.split('.');
+          const symbol = parts[1]; // BTC-PERP
+          if (!symbol) return;
+          
           const normalizedSymbol = normalizeSymbol(symbol);
           const cacheKey = `paradex_${normalizedSymbol}`;
           
-          const bids = marketData.bids || [];
-          const asks = marketData.asks || [];
+          // Format can be: bids/asks arrays OR inserts with side: BUY/SELL
+          let bids = marketData.bids || [];
+          let asks = marketData.asks || [];
           
-          const bestBid = bids.length > 0 ? parseFloat(bids[0][0]) : null;
-          const bestAsk = asks.length > 0 ? parseFloat(asks[0][0]) : null;
-          const bidSize = bids.length > 0 ? bids[0][1] : null;
-          const askSize = asks.length > 0 ? asks[0][1] : null;
-          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+          // Handle new format: inserts array with side field
+          if (marketData.inserts && Array.isArray(marketData.inserts)) {
+            bids = marketData.inserts
+              .filter(o => o.side === 'BUY')
+              .sort((a, b) => parseFloat(b.price) - parseFloat(a.price));
+            asks = marketData.inserts
+              .filter(o => o.side === 'SELL')
+              .sort((a, b) => parseFloat(a.price) - parseFloat(b.price));
+          }
+          
+          // Extract best prices based on format
+          let bestBid, bestAsk, bidSize, askSize;
+          
+          if (bids.length > 0) {
+            const first = bids[0];
+            if (Array.isArray(first)) {
+              bestBid = parseFloat(first[0]);
+              bidSize = first[1];
+            } else {
+              bestBid = parseFloat(first.price);
+              bidSize = first.size;
+            }
+          }
+          
+          if (asks.length > 0) {
+            const first = asks[0];
+            if (Array.isArray(first)) {
+              bestAsk = parseFloat(first[0]);
+              askSize = first[1];
+            } else {
+              bestAsk = parseFloat(first.price);
+              askSize = first.size;
+            }
+          }
+          
+          if (!bestBid && !bestAsk) return;
+          
+          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
           
           const orderbookData = {
             bestBid: bestBid?.toString(),
             bestAsk: bestAsk?.toString(),
-            bidSize,
-            askSize,
+            bidSize: bidSize?.toString(),
+            askSize: askSize?.toString(),
             spread
           };
           
@@ -758,6 +845,13 @@ function connectParadex() {
             const updatedData = { ...existingPrice, ...orderbookData };
             priceCache.set(cacheKey, updatedData);
             broadcast(updatedData);
+          } else {
+            broadcastOrderbook({
+              exchange: 'Paradex',
+              symbol: normalizedSymbol,
+              ...orderbookData,
+              timestamp: Date.now()
+            });
           }
         }
         
@@ -1070,9 +1164,15 @@ function connectReya() {
       // Handle depth (orderbook) channel
       if (data.type === 'channel_data' && data.channel && data.channel.includes('/depth')) {
         const item = data.data;
-        if (!item || !item.symbol) return;
         
-        const normalizedSymbol = normalizeSymbol(item.symbol);
+        
+        if (!item) return;
+        
+        // Symbol might be in item or in channel
+        const symbol = item.symbol || data.channel.split('/')[3]?.split('/')[0];
+        if (!symbol) return;
+        
+        const normalizedSymbol = normalizeSymbol(symbol);
         const cacheKey = `reya_${normalizedSymbol}`;
         
         const bids = item.bids || [];
