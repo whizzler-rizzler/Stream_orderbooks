@@ -20,7 +20,7 @@ const EXCHANGES = {
     url: 'wss://ws.api.prod.paradex.trade/v1',
     marketsUrl: 'https://api.prod.paradex.trade/v1/markets',
     name: 'Paradex',
-    proxyEnv: 'Proxy_extended_public',
+    proxyEnv: 'Proxy_paradex_public',
   },
   grvt: {
     url: 'wss://market-data.grvt.io/ws/full',
@@ -33,9 +33,10 @@ const EXCHANGES = {
     proxyEnv: 'Proxy_reya_public',
   },
   pacifica: {
-    url: 'wss://api.pacifica.fi/ws',
+    url: 'wss://ws.pacifica.fi/ws',
     name: 'Pacifica',
     proxyEnv: 'Proxy_pacifica_public',
+    allowNoProxy: true,
   },
 };
 
@@ -86,8 +87,14 @@ function parseProxyString(proxyString) {
   return null;
 }
 
-function getProxyAgent(exchangeKey) {
+function getProxyAgent(exchangeKey, skipProxy = false) {
   const exchange = EXCHANGES[exchangeKey];
+  
+  if (skipProxy && exchange?.allowNoProxy) {
+    console.log(`${exchange?.name || exchangeKey}: Connecting without proxy (fallback)`);
+    return null;
+  }
+  
   let proxyUrl = null;
   
   if (exchange && exchange.proxyEnv) {
@@ -624,27 +631,17 @@ function connectGrvt() {
   ws.on('open', () => {
     console.log('GRVT: Connected');
     
-    const tickerSelectors = GRVT_MARKETS.map(m => `${m}@500`);
-    ws.send(JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'subscribe',
-      params: {
-        stream: 'v1.mini.s',
-        selectors: tickerSelectors
-      },
-      id: 1
-    }));
-    
-    const bookSelectors = GRVT_MARKETS.map(m => `${m}@500-10-1`);
-    ws.send(JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'subscribe',
-      params: {
-        stream: 'v1.book.s',
-        selectors: bookSelectors
-      },
-      id: 2
-    }));
+    GRVT_MARKETS.forEach((market, i) => {
+      ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: i + 1,
+        method: 'subscribe',
+        params: {
+          stream: 'v1.mini.s',
+          feed: [`${market}@500`]
+        }
+      }));
+    });
     
     console.log(`GRVT: Subscribed to ${GRVT_MARKETS.length} markets (ticker + orderbook)`);
   });
@@ -653,7 +650,7 @@ function connectGrvt() {
     try {
       const data = JSON.parse(rawData.toString());
       
-      if (data.result) return;
+      if (data.result || data.error) return;
       
       if (data.stream === 'v1.mini.s' && data.feed) {
         const feed = data.feed;
@@ -859,8 +856,10 @@ function connectReya() {
   exchangeSockets.set('reya', ws);
 }
 
+let pacificaProxyFailed = false;
+
 function connectPacifica() {
-  const agent = getProxyAgent('pacifica');
+  const agent = getProxyAgent('pacifica', pacificaProxyFailed);
   const options = {
     headers: {
       'Origin': 'https://pacifica.fi',
@@ -881,7 +880,7 @@ function connectPacifica() {
       ws.send(JSON.stringify({
         method: 'subscribe',
         params: {
-          source: 'ticker',
+          source: 'prices',
           symbol: symbol
         }
       }));
@@ -889,9 +888,8 @@ function connectPacifica() {
       ws.send(JSON.stringify({
         method: 'subscribe',
         params: {
-          source: 'book',
-          symbol: symbol,
-          agg_level: 1
+          source: 'orderbook',
+          symbol: symbol
         }
       }));
     });
@@ -909,46 +907,51 @@ function connectPacifica() {
     try {
       const data = JSON.parse(rawData.toString());
       
-      if (data.channel === 'ticker' && data.data) {
-        const item = data.data;
-        const symbol = item.s;
-        if (!symbol) return;
+      if (data.channel === 'prices' && data.data) {
+        const items = Array.isArray(data.data) ? data.data : [data.data];
         
-        const price = parseFloat(item.mp || item.lp || 0);
-        if (!price || price <= 0) return;
-        
-        const normalizedSymbol = normalizeSymbol(symbol);
-        const cacheKey = `pacifica_${normalizedSymbol}`;
-        const prevPrice = previousPrices.get(cacheKey);
-        let priceChange;
-        if (prevPrice && prevPrice > 0) {
-          const change = ((price - prevPrice) / prevPrice) * 100;
-          priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
-        }
-        previousPrices.set(cacheKey, price);
-        
-        const existingOrderbook = orderbookCache.get(cacheKey) || {};
-        
-        const priceData = {
-          exchange: 'Pacifica',
-          symbol: normalizedSymbol,
-          price: price.toString(),
-          timestamp: Date.now(),
-          priceChange,
-          bestBid: existingOrderbook.bestBid,
-          bestAsk: existingOrderbook.bestAsk,
-          bidSize: existingOrderbook.bidSize,
-          askSize: existingOrderbook.askSize,
-          spread: existingOrderbook.spread
-        };
-        
-        priceCache.set(cacheKey, priceData);
-        broadcast(priceData);
+        items.forEach(item => {
+          const symbol = item.symbol || item.s;
+          if (!symbol) return;
+          
+          const price = parseFloat(item.mark || item.mid || item.mp || item.lp || 0);
+          if (!price || price <= 0) return;
+          
+          const normalizedSymbol = normalizeSymbol(symbol);
+          const cacheKey = `pacifica_${normalizedSymbol}`;
+          const prevPrice = previousPrices.get(cacheKey);
+          let priceChange;
+          if (prevPrice && prevPrice > 0) {
+            const change = ((price - prevPrice) / prevPrice) * 100;
+            priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
+          }
+          previousPrices.set(cacheKey, price);
+          
+          const existingOrderbook = orderbookCache.get(cacheKey) || {};
+          const volume = parseFloat(item.volume_24h || 0);
+          
+          const priceData = {
+            exchange: 'Pacifica',
+            symbol: normalizedSymbol,
+            price: price.toString(),
+            timestamp: Date.now(),
+            priceChange,
+            volume: volume > 0 ? volume.toString() : undefined,
+            bestBid: existingOrderbook.bestBid,
+            bestAsk: existingOrderbook.bestAsk,
+            bidSize: existingOrderbook.bidSize,
+            askSize: existingOrderbook.askSize,
+            spread: existingOrderbook.spread
+          };
+          
+          priceCache.set(cacheKey, priceData);
+          broadcast(priceData);
+        });
       }
       
-      if (data.channel === 'book' && data.data) {
+      if (data.channel === 'orderbook' && data.data) {
         const item = data.data;
-        const symbol = item.s;
+        const symbol = item.symbol || item.s;
         if (!symbol) return;
         
         const normalizedSymbol = normalizeSymbol(symbol);
@@ -1001,6 +1004,10 @@ function connectPacifica() {
   
   ws.on('error', (error) => {
     console.error('Pacifica: Error', error.message);
+    if (error.message.includes('502') && !pacificaProxyFailed) {
+      console.log('Pacifica: Proxy failed with 502, will try without proxy next');
+      pacificaProxyFailed = true;
+    }
   });
   
   ws.on('close', () => {
