@@ -9,15 +9,33 @@ const EXCHANGES = {
   lighter: {
     url: 'wss://mainnet.zklighter.elliot.ai/stream',
     name: 'Lighter',
+    proxyEnv: 'Proxy_lighter_public',
   },
   extended: {
     url: 'wss://api.starknet.extended.exchange/stream.extended.exchange/v1/prices/mark',
     name: 'Extended',
+    proxyEnv: 'Proxy_extended_public',
   },
   paradex: {
     url: 'wss://ws.api.prod.paradex.trade/v1',
     marketsUrl: 'https://api.prod.paradex.trade/v1/markets',
     name: 'Paradex',
+    proxyEnv: 'Proxy_extended_public',
+  },
+  grvt: {
+    url: 'wss://market-data.grvt.io/ws/full',
+    name: 'GRVT',
+    proxyEnv: 'Proxy_GRVT_public',
+  },
+  reya: {
+    url: 'wss://ws.reya.xyz',
+    name: 'Reya',
+    proxyEnv: 'Proxy_reya_public',
+  },
+  pacifica: {
+    url: 'wss://api.pacifica.fi/ws',
+    name: 'Pacifica',
+    proxyEnv: 'Proxy_pacifica_public',
   },
 };
 
@@ -35,14 +53,58 @@ const LIGHTER_MARKETS = [
   'USDCAD', 'CC', 'ICP', 'FIL', 'STRK'
 ];
 
-function getProxyAgent() {
-  const proxyUrl = process.env.PROXY_URL || process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+const GRVT_MARKETS = [
+  'BTC_USDT_Perp', 'ETH_USDT_Perp', 'SOL_USDT_Perp', 'DOGE_USDT_Perp', 
+  'XRP_USDT_Perp', 'LINK_USDT_Perp', 'AVAX_USDT_Perp', 'SUI_USDT_Perp',
+  'ARB_USDT_Perp', 'OP_USDT_Perp', 'NEAR_USDT_Perp', 'APT_USDT_Perp'
+];
+
+const REYA_MARKETS = [
+  'BTCRUSDPERP', 'ETHRUSDPERP', 'SOLRUSDPERP', 'BNBRUSDPERP', 
+  'XRPRUSDPERP', 'DOGERUSDPERP', 'SUIRUSDPERP', 'LINKRUSDPERP'
+];
+
+const PACIFICA_MARKETS = ['BTC', 'ETH', 'SOL', 'AVAX', 'SUI', 'ARB', 'OP', 'LINK'];
+
+function parseProxyString(proxyString) {
+  if (!proxyString) return null;
+  
+  if (proxyString.startsWith('http://') || proxyString.startsWith('https://') || proxyString.startsWith('socks')) {
+    return proxyString;
+  }
+  
+  const parts = proxyString.split(':');
+  if (parts.length === 4) {
+    const [host, port, user, pass] = parts;
+    return `http://${user}:${pass}@${host}:${port}`;
+  }
+  if (parts.length === 2) {
+    const [host, port] = parts;
+    return `http://${host}:${port}`;
+  }
+  
+  return null;
+}
+
+function getProxyAgent(exchangeKey) {
+  const exchange = EXCHANGES[exchangeKey];
+  let proxyUrl = null;
+  
+  if (exchange && exchange.proxyEnv) {
+    const rawProxy = process.env[exchange.proxyEnv];
+    proxyUrl = parseProxyString(rawProxy);
+  }
+  
+  if (!proxyUrl) {
+    const fallback = process.env.PROXY_URL || process.env.HTTP_PROXY || process.env.HTTPS_PROXY;
+    proxyUrl = parseProxyString(fallback) || fallback;
+  }
   
   if (!proxyUrl) {
     return null;
   }
   
-  console.log(`Using proxy: ${proxyUrl.replace(/:[^:@]+@/, ':****@')}`);
+  console.log(`${exchange?.name || exchangeKey}: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')}`);
   
   if (proxyUrl.startsWith('socks')) {
     return new SocksProxyAgent(proxyUrl);
@@ -56,6 +118,8 @@ function normalizeSymbol(symbol) {
   return symbol
     .replace(/-USD-PERP$/i, '')
     .replace(/-PERP$/i, '')
+    .replace(/RUSDPERP$/i, '')
+    .replace(/_USDT_Perp$/i, '')
     .replace(/-USD$/i, '')
     .toUpperCase();
 }
@@ -106,7 +170,7 @@ const server = http.createServer((req, res) => {
     }));
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Crypto Data Stream Aggregator Server');
+    res.end('Crypto Data Stream Aggregator Server - 6 Exchanges');
   }
 });
 
@@ -114,11 +178,21 @@ const wss = new WebSocketServer({ server });
 const clients = new Set();
 const exchangeSockets = new Map();
 const priceCache = new Map();
+const orderbookCache = new Map();
 const previousPrices = new Map();
 let paradexMarkets = [];
 
 function broadcast(data) {
   const message = JSON.stringify(data);
+  clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+function broadcastOrderbook(data) {
+  const message = JSON.stringify({ type: 'orderbook', ...data });
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
@@ -150,7 +224,7 @@ async function fetchParadexMarkets() {
 }
 
 function connectLighter() {
-  const agent = getProxyAgent();
+  const agent = getProxyAgent('lighter');
   const options = {
     headers: {
       'Origin': 'https://lighter.xyz',
@@ -170,8 +244,12 @@ function connectLighter() {
         type: 'subscribe',
         channel: `market_stats/${index}`
       }));
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        channel: `order_book/${index}`
+      }));
     });
-    console.log(`Lighter: Subscribed to ${LIGHTER_MARKETS.length} markets`);
+    console.log(`Lighter: Subscribed to ${LIGHTER_MARKETS.length} markets (stats + orderbook)`);
   });
   
   ws.on('message', (rawData) => {
@@ -201,17 +279,68 @@ function connectLighter() {
         const volumeTokens = extractVolumeNumber(stats, true);
         const volumeUsd = volumeTokens !== undefined ? volumeTokens * price : undefined;
         
+        const existingOrderbook = orderbookCache.get(cacheKey) || {};
+        
         const priceData = {
           exchange: 'Lighter',
           symbol: normalizedSymbol,
           price: price.toString(),
           timestamp: Date.now(),
           volume: volumeUsd !== undefined ? volumeUsd.toString() : undefined,
-          priceChange
+          priceChange,
+          bestBid: existingOrderbook.bestBid,
+          bestAsk: existingOrderbook.bestAsk,
+          bidSize: existingOrderbook.bidSize,
+          askSize: existingOrderbook.askSize,
+          spread: existingOrderbook.spread
         };
         
         priceCache.set(cacheKey, priceData);
         broadcast(priceData);
+      }
+      
+      if (data.type === 'update/order_book' && data.order_book) {
+        const channelParts = data.channel.split(':');
+        const marketId = channelParts[1];
+        const symbol = LIGHTER_MARKETS[parseInt(marketId)];
+        
+        if (!symbol) return;
+        
+        const normalizedSymbol = normalizeSymbol(symbol);
+        const cacheKey = `lighter_${normalizedSymbol}`;
+        
+        const bids = data.order_book.bids || [];
+        const asks = data.order_book.asks || [];
+        
+        const bestBid = bids.length > 0 ? parseFloat(bids[0].price) : null;
+        const bestAsk = asks.length > 0 ? parseFloat(asks[0].price) : null;
+        const bidSize = bids.length > 0 ? bids[0].size : null;
+        const askSize = asks.length > 0 ? asks[0].size : null;
+        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        
+        const orderbookData = {
+          bestBid: bestBid?.toString(),
+          bestAsk: bestAsk?.toString(),
+          bidSize,
+          askSize,
+          spread
+        };
+        
+        orderbookCache.set(cacheKey, orderbookData);
+        
+        const existingPrice = priceCache.get(cacheKey);
+        if (existingPrice) {
+          const updatedData = { ...existingPrice, ...orderbookData };
+          priceCache.set(cacheKey, updatedData);
+          broadcast(updatedData);
+        } else {
+          broadcastOrderbook({
+            exchange: 'Lighter',
+            symbol: normalizedSymbol,
+            ...orderbookData,
+            timestamp: Date.now()
+          });
+        }
       }
     } catch (error) {
       console.error('Lighter: Parse error', error.message);
@@ -232,7 +361,7 @@ function connectLighter() {
 }
 
 function connectExtended() {
-  const agent = getProxyAgent();
+  const agent = getProxyAgent('extended');
   const options = {
     headers: {
       'Origin': 'https://app.extended.exchange',
@@ -276,13 +405,20 @@ function connectExtended() {
           const volumeTokens = extractVolumeNumber(data.data, true);
           const volumeUsd = volumeTokens !== undefined ? volumeTokens * price : undefined;
           
+          const bestBid = data.data.bid ? parseFloat(data.data.bid) : null;
+          const bestAsk = data.data.ask ? parseFloat(data.data.ask) : null;
+          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+          
           const priceData = {
             exchange: 'Extended',
             symbol: normalizedSymbol,
             price: price.toString(),
             timestamp: Date.now(),
             volume: volumeUsd !== undefined ? volumeUsd.toString() : undefined,
-            priceChange
+            priceChange,
+            bestBid: bestBid?.toString(),
+            bestAsk: bestAsk?.toString(),
+            spread
           };
           
           priceCache.set(cacheKey, priceData);
@@ -308,7 +444,7 @@ function connectExtended() {
 }
 
 function connectParadex() {
-  const agent = getProxyAgent();
+  const agent = getProxyAgent('paradex');
   const options = {
     headers: {
       'Origin': 'https://app.paradex.trade',
@@ -332,16 +468,21 @@ function connectParadex() {
     ws.send(JSON.stringify(summaryMsg));
     
     paradexMarkets.forEach((market, index) => {
-      const msg = {
+      ws.send(JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
         params: { channel: `trades.${market}` },
         id: index + 2,
-      };
-      ws.send(JSON.stringify(msg));
+      }));
+      ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'subscribe',
+        params: { channel: `order_book.${market}` },
+        id: index + 1000,
+      }));
     });
     
-    console.log(`Paradex: Subscribed to ${paradexMarkets.length} markets`);
+    console.log(`Paradex: Subscribed to ${paradexMarkets.length} markets (trades + orderbook)`);
   });
   
   ws.on('message', (rawData) => {
@@ -373,18 +514,57 @@ function connectParadex() {
             
             const volume = item.total_volume ? parseFloat(item.total_volume) * price : undefined;
             
+            const existingOrderbook = orderbookCache.get(cacheKey) || {};
+            
             const priceData = {
               exchange: 'Paradex',
               symbol: normalizedSymbol,
               price: price.toString(),
               timestamp: Date.now(),
               volume: volume !== undefined ? volume.toString() : undefined,
-              priceChange
+              priceChange,
+              bestBid: existingOrderbook.bestBid,
+              bestAsk: existingOrderbook.bestAsk,
+              bidSize: existingOrderbook.bidSize,
+              askSize: existingOrderbook.askSize,
+              spread: existingOrderbook.spread
             };
             
             priceCache.set(cacheKey, priceData);
             broadcast(priceData);
           });
+        }
+        
+        if (channel && channel.startsWith('order_book.')) {
+          const symbol = channel.replace('order_book.', '');
+          const normalizedSymbol = normalizeSymbol(symbol);
+          const cacheKey = `paradex_${normalizedSymbol}`;
+          
+          const bids = marketData.bids || [];
+          const asks = marketData.asks || [];
+          
+          const bestBid = bids.length > 0 ? parseFloat(bids[0][0]) : null;
+          const bestAsk = asks.length > 0 ? parseFloat(asks[0][0]) : null;
+          const bidSize = bids.length > 0 ? bids[0][1] : null;
+          const askSize = asks.length > 0 ? asks[0][1] : null;
+          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+          
+          const orderbookData = {
+            bestBid: bestBid?.toString(),
+            bestAsk: bestAsk?.toString(),
+            bidSize,
+            askSize,
+            spread
+          };
+          
+          orderbookCache.set(cacheKey, orderbookData);
+          
+          const existingPrice = priceCache.get(cacheKey);
+          if (existingPrice) {
+            const updatedData = { ...existingPrice, ...orderbookData };
+            priceCache.set(cacheKey, updatedData);
+            broadcast(updatedData);
+          }
         }
         
         if (channel && channel.startsWith('trades.') && marketData.price) {
@@ -395,11 +575,14 @@ function connectParadex() {
             const normalizedSymbol = normalizeSymbol(symbol);
             const cacheKey = `paradex_${normalizedSymbol}`;
             
+            const existingOrderbook = orderbookCache.get(cacheKey) || {};
+            
             const priceData = {
               exchange: 'Paradex',
               symbol: normalizedSymbol,
               price: price.toString(),
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              ...existingOrderbook
             };
             
             priceCache.set(cacheKey, priceData);
@@ -423,6 +606,411 @@ function connectParadex() {
   });
   
   exchangeSockets.set('paradex', ws);
+}
+
+function connectGrvt() {
+  const agent = getProxyAgent('grvt');
+  const options = {
+    headers: {
+      'Origin': 'https://grvt.io',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  };
+  if (agent) options.agent = agent;
+  
+  console.log('GRVT: Connecting...');
+  const ws = new WebSocket(EXCHANGES.grvt.url, options);
+  
+  ws.on('open', () => {
+    console.log('GRVT: Connected');
+    
+    const tickerSelectors = GRVT_MARKETS.map(m => `${m}@500`);
+    ws.send(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        stream: 'v1.mini.s',
+        selectors: tickerSelectors
+      },
+      id: 1
+    }));
+    
+    const bookSelectors = GRVT_MARKETS.map(m => `${m}@500-10-1`);
+    ws.send(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'subscribe',
+      params: {
+        stream: 'v1.book.s',
+        selectors: bookSelectors
+      },
+      id: 2
+    }));
+    
+    console.log(`GRVT: Subscribed to ${GRVT_MARKETS.length} markets (ticker + orderbook)`);
+  });
+  
+  ws.on('message', (rawData) => {
+    try {
+      const data = JSON.parse(rawData.toString());
+      
+      if (data.result) return;
+      
+      if (data.stream === 'v1.mini.s' && data.feed) {
+        const feed = data.feed;
+        const instrument = feed.instrument || feed.i;
+        if (!instrument) return;
+        
+        const markPrice = feed.mark_price || feed.mp;
+        const lastPrice = feed.last_price || feed.lp;
+        const price = parseFloat(markPrice || lastPrice || 0);
+        
+        if (!price || price <= 0) return;
+        
+        const normalizedSymbol = normalizeSymbol(instrument);
+        const cacheKey = `grvt_${normalizedSymbol}`;
+        const prevPrice = previousPrices.get(cacheKey);
+        let priceChange;
+        if (prevPrice && prevPrice > 0) {
+          const change = ((price - prevPrice) / prevPrice) * 100;
+          priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
+        }
+        previousPrices.set(cacheKey, price);
+        
+        const existingOrderbook = orderbookCache.get(cacheKey) || {};
+        
+        const priceData = {
+          exchange: 'GRVT',
+          symbol: normalizedSymbol,
+          price: price.toString(),
+          timestamp: Date.now(),
+          priceChange,
+          bestBid: existingOrderbook.bestBid,
+          bestAsk: existingOrderbook.bestAsk,
+          bidSize: existingOrderbook.bidSize,
+          askSize: existingOrderbook.askSize,
+          spread: existingOrderbook.spread
+        };
+        
+        priceCache.set(cacheKey, priceData);
+        broadcast(priceData);
+      }
+      
+      if (data.stream === 'v1.book.s' && data.feed) {
+        const feed = data.feed;
+        const instrument = feed.instrument || feed.i;
+        if (!instrument) return;
+        
+        const normalizedSymbol = normalizeSymbol(instrument);
+        const cacheKey = `grvt_${normalizedSymbol}`;
+        
+        const bids = feed.bids || feed.b || [];
+        const asks = feed.asks || feed.a || [];
+        
+        const bestBid = bids.length > 0 ? parseFloat(bids[0].price || bids[0].p || bids[0][0]) : null;
+        const bestAsk = asks.length > 0 ? parseFloat(asks[0].price || asks[0].p || asks[0][0]) : null;
+        const bidSize = bids.length > 0 ? (bids[0].size || bids[0].s || bids[0][1]) : null;
+        const askSize = asks.length > 0 ? (asks[0].size || asks[0].s || asks[0][1]) : null;
+        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        
+        const orderbookData = {
+          bestBid: bestBid?.toString(),
+          bestAsk: bestAsk?.toString(),
+          bidSize: bidSize?.toString(),
+          askSize: askSize?.toString(),
+          spread
+        };
+        
+        orderbookCache.set(cacheKey, orderbookData);
+        
+        const existingPrice = priceCache.get(cacheKey);
+        if (existingPrice) {
+          const updatedData = { ...existingPrice, ...orderbookData };
+          priceCache.set(cacheKey, updatedData);
+          broadcast(updatedData);
+        }
+      }
+    } catch (error) {
+      console.error('GRVT: Parse error', error.message);
+    }
+  });
+  
+  ws.on('error', (error) => {
+    console.error('GRVT: Error', error.message);
+  });
+  
+  ws.on('close', () => {
+    console.log('GRVT: Disconnected, reconnecting in 5s...');
+    exchangeSockets.delete('grvt');
+    setTimeout(connectGrvt, 5000);
+  });
+  
+  exchangeSockets.set('grvt', ws);
+}
+
+function connectReya() {
+  const agent = getProxyAgent('reya');
+  const options = {
+    headers: {
+      'Origin': 'https://reya.xyz',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  };
+  if (agent) options.agent = agent;
+  
+  console.log('Reya: Connecting...');
+  const ws = new WebSocket(EXCHANGES.reya.url, options);
+  
+  ws.on('open', () => {
+    console.log('Reya: Connected');
+    
+    ws.send(JSON.stringify({
+      type: 'subscribe',
+      channel: '/v2/prices'
+    }));
+    
+    ws.send(JSON.stringify({
+      type: 'subscribe',
+      channel: '/v2/markets/summary'
+    }));
+    
+    console.log('Reya: Subscribed to prices and markets summary');
+  });
+  
+  ws.on('message', (rawData) => {
+    try {
+      const data = JSON.parse(rawData.toString());
+      
+      if (data.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+        return;
+      }
+      
+      if (data.type === 'channel_data' && data.channel === '/v2/prices') {
+        const prices = Array.isArray(data.data) ? data.data : [data.data];
+        
+        prices.forEach((item) => {
+          if (!item.symbol) return;
+          
+          const oraclePrice = parseFloat(item.oraclePrice || item.poolPrice || 0);
+          if (!oraclePrice || oraclePrice <= 0) return;
+          
+          const normalizedSymbol = normalizeSymbol(item.symbol);
+          const cacheKey = `reya_${normalizedSymbol}`;
+          const prevPrice = previousPrices.get(cacheKey);
+          let priceChange;
+          if (prevPrice && prevPrice > 0) {
+            const change = ((oraclePrice - prevPrice) / prevPrice) * 100;
+            priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
+          }
+          previousPrices.set(cacheKey, oraclePrice);
+          
+          const existingOrderbook = orderbookCache.get(cacheKey) || {};
+          
+          const priceData = {
+            exchange: 'Reya',
+            symbol: normalizedSymbol,
+            price: oraclePrice.toString(),
+            timestamp: Date.now(),
+            priceChange,
+            bestBid: existingOrderbook.bestBid,
+            bestAsk: existingOrderbook.bestAsk,
+            spread: existingOrderbook.spread
+          };
+          
+          priceCache.set(cacheKey, priceData);
+          broadcast(priceData);
+        });
+      }
+      
+      if (data.type === 'channel_data' && data.channel === '/v2/markets/summary') {
+        const summaries = Array.isArray(data.data) ? data.data : [data.data];
+        
+        summaries.forEach((item) => {
+          if (!item.symbol) return;
+          
+          const normalizedSymbol = normalizeSymbol(item.symbol);
+          const cacheKey = `reya_${normalizedSymbol}`;
+          
+          const volume = item.volume24h ? parseFloat(item.volume24h) : undefined;
+          
+          const existingPrice = priceCache.get(cacheKey);
+          if (existingPrice && volume) {
+            existingPrice.volume = volume.toString();
+            priceCache.set(cacheKey, existingPrice);
+            broadcast(existingPrice);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Reya: Parse error', error.message);
+    }
+  });
+  
+  ws.on('error', (error) => {
+    console.error('Reya: Error', error.message);
+  });
+  
+  ws.on('close', () => {
+    console.log('Reya: Disconnected, reconnecting in 5s...');
+    exchangeSockets.delete('reya');
+    setTimeout(connectReya, 5000);
+  });
+  
+  exchangeSockets.set('reya', ws);
+}
+
+function connectPacifica() {
+  const agent = getProxyAgent('pacifica');
+  const options = {
+    headers: {
+      'Origin': 'https://pacifica.fi',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+  };
+  if (agent) options.agent = agent;
+  
+  console.log('Pacifica: Connecting...');
+  const ws = new WebSocket(EXCHANGES.pacifica.url, options);
+  
+  let pingInterval;
+  
+  ws.on('open', () => {
+    console.log('Pacifica: Connected');
+    
+    PACIFICA_MARKETS.forEach((symbol) => {
+      ws.send(JSON.stringify({
+        method: 'subscribe',
+        params: {
+          source: 'ticker',
+          symbol: symbol
+        }
+      }));
+      
+      ws.send(JSON.stringify({
+        method: 'subscribe',
+        params: {
+          source: 'book',
+          symbol: symbol,
+          agg_level: 1
+        }
+      }));
+    });
+    
+    console.log(`Pacifica: Subscribed to ${PACIFICA_MARKETS.length} markets (ticker + orderbook)`);
+    
+    pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ method: 'ping' }));
+      }
+    }, 30000);
+  });
+  
+  ws.on('message', (rawData) => {
+    try {
+      const data = JSON.parse(rawData.toString());
+      
+      if (data.channel === 'ticker' && data.data) {
+        const item = data.data;
+        const symbol = item.s;
+        if (!symbol) return;
+        
+        const price = parseFloat(item.mp || item.lp || 0);
+        if (!price || price <= 0) return;
+        
+        const normalizedSymbol = normalizeSymbol(symbol);
+        const cacheKey = `pacifica_${normalizedSymbol}`;
+        const prevPrice = previousPrices.get(cacheKey);
+        let priceChange;
+        if (prevPrice && prevPrice > 0) {
+          const change = ((price - prevPrice) / prevPrice) * 100;
+          priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
+        }
+        previousPrices.set(cacheKey, price);
+        
+        const existingOrderbook = orderbookCache.get(cacheKey) || {};
+        
+        const priceData = {
+          exchange: 'Pacifica',
+          symbol: normalizedSymbol,
+          price: price.toString(),
+          timestamp: Date.now(),
+          priceChange,
+          bestBid: existingOrderbook.bestBid,
+          bestAsk: existingOrderbook.bestAsk,
+          bidSize: existingOrderbook.bidSize,
+          askSize: existingOrderbook.askSize,
+          spread: existingOrderbook.spread
+        };
+        
+        priceCache.set(cacheKey, priceData);
+        broadcast(priceData);
+      }
+      
+      if (data.channel === 'book' && data.data) {
+        const item = data.data;
+        const symbol = item.s;
+        if (!symbol) return;
+        
+        const normalizedSymbol = normalizeSymbol(symbol);
+        const cacheKey = `pacifica_${normalizedSymbol}`;
+        
+        const levels = item.l || [];
+        const bids = levels[0] || [];
+        const asks = levels[1] || [];
+        
+        const bestBid = bids.length > 0 ? parseFloat(bids[0].p) : null;
+        const bestAsk = asks.length > 0 ? parseFloat(asks[0].p) : null;
+        const bidSize = bids.length > 0 ? bids[0].a : null;
+        const askSize = asks.length > 0 ? asks[0].a : null;
+        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        
+        const orderbookData = {
+          bestBid: bestBid?.toString(),
+          bestAsk: bestAsk?.toString(),
+          bidSize,
+          askSize,
+          spread
+        };
+        
+        orderbookCache.set(cacheKey, orderbookData);
+        
+        const existingPrice = priceCache.get(cacheKey);
+        if (existingPrice) {
+          const updatedData = { ...existingPrice, ...orderbookData };
+          priceCache.set(cacheKey, updatedData);
+          broadcast(updatedData);
+        } else {
+          const midPrice = bestBid && bestAsk ? ((bestBid + bestAsk) / 2) : bestBid || bestAsk;
+          if (midPrice) {
+            const priceData = {
+              exchange: 'Pacifica',
+              symbol: normalizedSymbol,
+              price: midPrice.toString(),
+              timestamp: Date.now(),
+              ...orderbookData
+            };
+            priceCache.set(cacheKey, priceData);
+            broadcast(priceData);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Pacifica: Parse error', error.message);
+    }
+  });
+  
+  ws.on('error', (error) => {
+    console.error('Pacifica: Error', error.message);
+  });
+  
+  ws.on('close', () => {
+    console.log('Pacifica: Disconnected, reconnecting in 5s...');
+    if (pingInterval) clearInterval(pingInterval);
+    exchangeSockets.delete('pacifica');
+    setTimeout(connectPacifica, 5000);
+  });
+  
+  exchangeSockets.set('pacifica', ws);
 }
 
 wss.on('connection', (ws) => {
@@ -449,11 +1037,14 @@ async function start() {
   
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    console.log(`Proxy: ${process.env.PROXY_URL ? 'Enabled' : 'Disabled'}`);
+    console.log(`Exchanges: ${Object.keys(EXCHANGES).join(', ')}`);
     
     connectLighter();
     connectExtended();
     connectParadex();
+    connectGrvt();
+    connectReya();
+    connectPacifica();
   });
 }
 
