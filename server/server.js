@@ -655,9 +655,9 @@ function connectExtendedOrderbook() {
   
   // Maintain orderbook state per market (for SNAPSHOT/DELTA updates)
   const extendedOrderbooks = new Map();
-  // Throttle broadcasts per symbol (max 1 per 50ms)
+  // Throttle broadcasts per symbol (max 1 per 200ms for stability)
   const extendedLastBroadcast = new Map();
-  const EXTENDED_THROTTLE_MS = 50;
+  const EXTENDED_THROTTLE_MS = 200;
   let extNegativeSpreadCount = 0;
   let extValidSpreadCount = 0;
   
@@ -735,29 +735,36 @@ function connectExtendedOrderbook() {
       // Skip if no data at all
       if (!bestBid && !bestAsk) return;
       
-      // VALIDATION: Skip if spread is negative (inconsistent state during fast updates)
-      if (bestBid && bestAsk && bestAsk < bestBid) {
+      let finalBid = bestBid;
+      let finalAsk = bestAsk;
+      let finalBidSize = bidSize;
+      let finalAskSize = askSize;
+      
+      // FIX: If spread is negative, swap bid and ask (data race condition)
+      if (finalBid && finalAsk && finalAsk < finalBid) {
         extNegativeSpreadCount++;
-        // Log every 1000th negative spread for debugging
+        // Swap them to fix the inversion
+        [finalBid, finalAsk] = [finalAsk, finalBid];
+        [finalBidSize, finalAskSize] = [finalAskSize, finalBidSize];
         if (extNegativeSpreadCount % 1000 === 1) {
-          console.log(`Extended: Negative spread #${extNegativeSpreadCount} for ${symbol}: bid=${bestBid} ask=${bestAsk}`);
+          console.log(`Extended: Fixed inverted spread #${extNegativeSpreadCount} for ${symbol}: swapped bid/ask`);
         }
-        return; // Skip this update, wait for consistent state
+      } else {
+        extValidSpreadCount++;
       }
       
-      extValidSpreadCount++;
-      const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+      const spread = finalBid && finalAsk ? (finalAsk - finalBid).toFixed(4) : null;
       
-      // THROTTLE: Max 1 broadcast per symbol per 50ms
+      // THROTTLE: Max 1 broadcast per symbol per 200ms
       const now = Date.now();
       const lastTime = extendedLastBroadcast.get(symbol) || 0;
       if (now - lastTime < EXTENDED_THROTTLE_MS) {
         // Update cache but don't broadcast yet
         orderbookCache.set(cacheKey, {
-          bestBid: bestBid?.toString(),
-          bestAsk: bestAsk?.toString(),
-          bidSize: bidSize?.toString(),
-          askSize: askSize?.toString(),
+          bestBid: finalBid?.toString(),
+          bestAsk: finalAsk?.toString(),
+          bidSize: finalBidSize?.toString(),
+          askSize: finalAskSize?.toString(),
           spread
         });
         return;
@@ -765,10 +772,10 @@ function connectExtendedOrderbook() {
       extendedLastBroadcast.set(symbol, now);
       
       const orderbookData = {
-        bestBid: bestBid?.toString(),
-        bestAsk: bestAsk?.toString(),
-        bidSize: bidSize?.toString(),
-        askSize: askSize?.toString(),
+        bestBid: finalBid?.toString(),
+        bestAsk: finalAsk?.toString(),
+        bidSize: finalBidSize?.toString(),
+        askSize: finalAskSize?.toString(),
         spread
       };
       
