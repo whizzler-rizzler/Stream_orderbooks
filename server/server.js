@@ -586,35 +586,17 @@ function connectExtended() {
           
           const normalizedSymbol = normalizeSymbol(market);
           const cacheKey = `extended_${normalizedSymbol}`;
-          const prevPrice = previousPrices.get(cacheKey);
-          let priceChange;
-          if (prevPrice && prevPrice > 0) {
-            const change = ((price - prevPrice) / prevPrice) * 100;
-            priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
-          }
-          previousPrices.set(cacheKey, price);
           
+          // Only update volume and priceChange - price comes from orderbook mid price
           const volumeTokens = extractVolumeNumber(data.data, true);
           const volumeUsd = volumeTokens !== undefined ? volumeTokens * price : undefined;
           
-          const bestBid = data.data.bid ? parseFloat(data.data.bid) : null;
-          const bestAsk = data.data.ask ? parseFloat(data.data.ask) : null;
-          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
-          
-          const priceData = {
-            exchange: 'Extended',
-            symbol: normalizedSymbol,
-            price: price.toString(),
-            timestamp: Date.now(),
-            volume: volumeUsd !== undefined ? volumeUsd.toString() : undefined,
-            priceChange,
-            bestBid: bestBid?.toString(),
-            bestAsk: bestAsk?.toString(),
-            spread
-          };
-          
-          priceCache.set(cacheKey, priceData);
-          broadcast(priceData);
+          // Update existing orderbook data with volume only (don't overwrite price)
+          const existing = priceCache.get(cacheKey);
+          if (existing && volumeUsd !== undefined) {
+            existing.volume = volumeUsd.toString();
+            priceCache.set(cacheKey, existing);
+          }
         }
       }
     } catch (error) {
