@@ -94,6 +94,11 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
 ## Recent Changes (2026-02-03)
+- Added [STATS 10s] diagnostic logs showing message frequency from each exchange
+- Removed ALL Extended orderbook filtering - now broadcasts every message immediately
+- Extended orderbook: ~660 msg/sec (was filtered before, now real-time)
+- Paradex: ~1400 msg/sec, GRVT: ~150 msg/sec, Pacifica: ~200 msg/sec
+- Lighter issue: API sends only ~1 msg/10s after subscription (API limitation)
 - Added heartbeat monitoring (30s interval) - logs status of all 7 exchange connections
 - Added ping/pong keepalive for all WebSocket connections to prevent silent disconnects
 - Added auto-reconnect for dead connections detected by heartbeat
