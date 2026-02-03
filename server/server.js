@@ -1552,13 +1552,25 @@ async function fetchNadoTickers() {
   try {
     console.log('NADO: Fetching tickers...');
     const proxyUrl = getNadoProxy();
-    const options = {};
+    const options = {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    };
     if (proxyUrl) {
       options.agent = new HttpsProxyAgent(proxyUrl);
     }
     
     const response = await fetch(EXCHANGES.nado.tickersUrl, options);
-    const data = await response.json();
+    const text = await response.text();
+    
+    if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+      console.log('NADO: Cloudflare block on tickers, keeping existing data');
+      return nadoMarkets;
+    }
+    
+    const data = JSON.parse(text);
     
     nadoMarkets = [];
     nadoTickerData.clear();
@@ -1598,8 +1610,11 @@ async function fetchNadoOrderbook(tickerId) {
 
 async function fetchNadoOrderbookWithProxy(tickerId, proxyUrl) {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    
     const options = { 
-      timeout: 5000,
+      signal: controller.signal,
       headers: {
         'Accept': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -1611,6 +1626,7 @@ async function fetchNadoOrderbookWithProxy(tickerId, proxyUrl) {
     
     const url = `${EXCHANGES.nado.orderbookUrl}?ticker_id=${encodeURIComponent(tickerId)}&depth=1`;
     const response = await fetch(url, options);
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       return null;
@@ -1673,26 +1689,33 @@ async function startNadoPolling() {
   if (nadoPollingActive) return;
   nadoPollingActive = true;
   
-  const numWorkers = NADO_PROXIES.length;
-  const requestsPerWorker = 10;
-  const workerInterval = Math.floor(1000 / requestsPerWorker);
+  const numWorkers = Math.min(NADO_PROXIES.length, nadoMarkets.length);
+  const marketsPerWorker = Math.ceil(nadoMarkets.length / numWorkers);
+  const maxRatePerProxy = 39;
+  const workerInterval = Math.floor(1000 / Math.min(maxRatePerProxy, marketsPerWorker * 10));
   
-  console.log(`NADO: Starting ${numWorkers} parallel workers`);
-  console.log(`NADO: Each worker: ${requestsPerWorker} req/sec, interval: ${workerInterval}ms`);
-  console.log(`NADO: Total effective rate: ${numWorkers * requestsPerWorker} req/sec for ${nadoMarkets.length} markets`);
+  console.log(`NADO: ${nadoMarkets.length} markets, ${numWorkers} workers`);
+  console.log(`NADO: ~${marketsPerWorker} markets per worker, interval: ${workerInterval}ms`);
+  console.log(`NADO: Expected ~${Math.round(1000 / workerInterval * marketsPerWorker)} updates/sec per worker`);
   
   for (let workerId = 0; workerId < numWorkers; workerId++) {
     const proxyUrl = NADO_PROXIES[workerId];
-    let localMarketIndex = workerId;
+    const startIdx = workerId * marketsPerWorker;
+    const endIdx = Math.min(startIdx + marketsPerWorker, nadoMarkets.length);
+    const workerMarkets = nadoMarkets.slice(startIdx, endIdx);
+    
+    if (workerMarkets.length === 0) continue;
+    
+    let localIdx = 0;
     
     const workerLoop = async () => {
-      if (!nadoPollingActive || nadoMarkets.length === 0) {
+      if (!nadoPollingActive || workerMarkets.length === 0) {
         setTimeout(workerLoop, 1000);
         return;
       }
       
-      const tickerId = nadoMarkets[localMarketIndex % nadoMarkets.length];
-      localMarketIndex = (localMarketIndex + numWorkers) % nadoMarkets.length;
+      const tickerId = workerMarkets[localIdx];
+      localIdx = (localIdx + 1) % workerMarkets.length;
       
       nadoStats.requests++;
       const result = await fetchNadoOrderbookWithProxy(tickerId, proxyUrl);
@@ -1705,13 +1728,15 @@ async function startNadoPolling() {
       setTimeout(workerLoop, workerInterval);
     };
     
-    setTimeout(workerLoop, workerId * Math.floor(workerInterval / numWorkers));
+    setTimeout(workerLoop, workerId * 10);
+    console.log(`NADO Worker ${workerId}: markets ${startIdx}-${endIdx-1} (${workerMarkets.length} markets)`);
   }
   
   setInterval(() => {
     const elapsed = (Date.now() - nadoStats.lastReset) / 1000;
     const rps = Math.round(nadoStats.requests / elapsed);
-    console.log(`NADO stats: ${nadoStats.requests} req, ${nadoStats.success} ok, ${nadoStats.errors} err, ${rps} req/sec`);
+    const successRate = nadoStats.requests > 0 ? Math.round(nadoStats.success / nadoStats.requests * 100) : 0;
+    console.log(`NADO: ${nadoStats.requests} req, ${nadoStats.success} ok (${successRate}%), ${rps} req/sec`);
     nadoStats = { requests: 0, success: 0, errors: 0, lastReset: Date.now() };
   }, 10000);
   
