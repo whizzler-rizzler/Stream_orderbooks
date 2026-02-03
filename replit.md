@@ -94,6 +94,8 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
 ## Recent Changes (2026-02-03)
+- Fixed Extended orderbook: added price validation (>0, no NaN) and spread validation (ask > bid)
+- Extended now streams 20+ markets automatically: BTC-USD, ETH-USD, SOL-USD, DOGE-USD, LTC-USD, BNB-USD, etc.
 - Added NADO exchange with REST API polling (23 markets, $514M volume)
 - NADO uses 11 proxy rotation for 429 req/sec effective rate
 - GRVT fully working with API key authentication and mini ticker orderbook
