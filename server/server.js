@@ -320,6 +320,25 @@ const orderbookCache = new Map();
 const previousPrices = new Map();
 let paradexMarkets = [];
 
+const msgCounters = {
+  lighter: 0,
+  extended: 0,
+  extended_orderbook: 0,
+  paradex: 0,
+  grvt: 0,
+  reya: 0,
+  pacifica: 0,
+  nado: 0
+};
+
+setInterval(() => {
+  const stats = Object.entries(msgCounters)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(', ');
+  console.log(`[STATS 10s] ${stats}`);
+  Object.keys(msgCounters).forEach(k => msgCounters[k] = 0);
+}, 10000);
+
 function broadcast(data) {
   const message = JSON.stringify(data);
   clients.forEach((client) => {
@@ -413,6 +432,7 @@ function connectLighter() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.lighter++;
       const data = JSON.parse(rawData.toString());
       
       if (data.type === 'update/market_stats' && data.market_stats) {
@@ -550,6 +570,7 @@ function connectExtended() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.extended++;
       const lines = rawData.toString().split('\n');
       
       for (const line of lines) {
@@ -642,6 +663,7 @@ function connectExtendedOrderbook() {
   ws.on('message', (rawData) => {
     try {
       extMsgCount++;
+      msgCounters.extended_orderbook++;
       const msg = JSON.parse(rawData.toString());
       
       
@@ -708,18 +730,7 @@ function connectExtendedOrderbook() {
       
       if (!bestBid && !bestAsk) return;
       
-      // Spread must be positive (ask > bid), skip invalid data
-      if (bestBid && bestAsk && bestAsk < bestBid) return;
-      
       const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
-      
-      // Only broadcast if values changed
-      const existingOB = orderbookCache.get(cacheKey);
-      if (existingOB && 
-          existingOB.bestBid === bestBid?.toString() && 
-          existingOB.bestAsk === bestAsk?.toString()) {
-        return;
-      }
       
       const orderbookData = {
         bestBid: bestBid?.toString(),
@@ -883,6 +894,7 @@ function connectParadex() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.paradex++;
       const data = JSON.parse(rawData.toString());
       
       if (data.result === 'subscribed' || data.method === 'ping') return;
@@ -1201,6 +1213,7 @@ async function connectGrvt() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.grvt++;
       const data = JSON.parse(rawData.toString());
       
       // Debug first few messages
@@ -1381,6 +1394,7 @@ function connectReya() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.reya++;
       const data = JSON.parse(rawData.toString());
       
       if (data.type === 'ping') {
@@ -1516,6 +1530,7 @@ function connectPacifica() {
   
   ws.on('message', (rawData) => {
     try {
+      msgCounters.pacifica++;
       const data = JSON.parse(rawData.toString());
       
       if (data.channel === 'prices' && data.data) {
@@ -1763,6 +1778,7 @@ async function startNadoPolling() {
       const result = await fetchNadoOrderbookDedicated(market, proxyUrl);
       if (result) {
         nadoStats.success++;
+        msgCounters.nado++;
       } else {
         nadoStats.errors++;
       }
