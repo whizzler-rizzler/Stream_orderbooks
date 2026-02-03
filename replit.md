@@ -1,15 +1,16 @@
-# Crypto Aggregator - Real-time Exchange Data (6 Exchanges + Orderbook)
+# Crypto Aggregator - Real-time Exchange Data (7 Exchanges + Orderbook)
 
 ## Overview
-Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych giełd kryptowalut z obsługą dedykowanych proxy per-exchange oraz danymi orderbook (BID/ASK/Spread).
+Aplikacja do agregacji danych w czasie rzeczywistym z 7 zdecentralizowanych giełd kryptowalut z obsługą dedykowanych proxy per-exchange oraz danymi orderbook (BID/ASK/Spread).
 
 ## Current Status (February 2026)
-- **Lighter**: $5.2B+ volume, 102 markets, **pełny BID/ASK orderbook** ✓
+- **Lighter**: $3B+ volume, 97 markets, **pełny BID/ASK orderbook** ✓
 - **Extended**: 79 markets, **orderbook działający** (SNAPSHOT + DELTA) ✓
 - **Paradex**: 108 markets (PERP), **orderbook działający** (inserts format with mid price fallback) ✓
 - **GRVT**: 82 markets, **pełny BID/ASK z mini ticker** ✓ (uwierzytelnienie przez API key)
-- **Reya**: 85 markets, $148M volume, **tylko ceny** (WebSocket API nie udostępnia orderbook)
-- **Pacifica**: $1.0B+ volume, 50 markets, **dynamic market loading** z API
+- **Reya**: 86 markets, $175M volume, **tylko ceny** (WebSocket API nie udostępnia orderbook - model AMM)
+- **Pacifica**: $966M volume, 50 markets, **dynamic market loading** z API
+- **NADO**: 23 markets, $514M volume, **REST API polling z 11 proxy rotacją** ✓ (429 req/sec)
 
 ## Architecture
 
@@ -41,7 +42,7 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 │   │   └── CryptoAggregator.tsx    # Main dashboard component
 │   └── hooks/
 ├── server/
-│   └── server.js                    # WebSocket aggregator (6 exchanges)
+│   └── server.js                    # WebSocket aggregator (7 exchanges)
 ├── public/
 ├── vite.config.ts
 └── package.json
@@ -53,26 +54,34 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 6 zdecentralizowanych gie�
 - `Proxy_pacifica_public` - Dedicated proxy for Pacifica
 - `Proxy_extended_public` - Dedicated proxy for Extended
 - `Proxy_reya_public` - Dedicated proxy for Reya
+- `Nado_proxy1` to `Nado_proxy11` - 11 rotating proxies for NADO REST API
 - `PROXY_URL` - Fallback proxy URL
 
 ## Proxy Format
 Supports format: `host:port:user:pass` which is converted to `http://user:pass@host:port`
 
 ## Known Issues
-1. **GRVT**: Subscription format returns error 1107 "JSON RPC version must be 2.0" - API requires specific format
-2. **Reya**: Depth channel subscribed but no data received - may need different channel format
-3. **Pacifica**: Book source configured but orderbook data not visible in UI
+1. **Reya**: Orderbook nie dostępny - giełda używa modelu AMM (passive liquidity pools), nie CLOB
+2. **Pacifica**: Book source configured but orderbook data not visible in UI
 
 ## Orderbook Implementation Details
 - **Lighter**: `order_book/{market_id}` channel - sorted bids/asks, skip unchanged values
 - **Extended**: `/v1/orderbooks` single endpoint - SNAPSHOT clears state, DELTA updates incrementally
 - **Paradex**: `order_book.{market}.snapshot@15@100ms` channel - inserts array with side: BUY/SELL
-- **Reya**: `/v2/market/{symbol}/depth` channel - bids[0].px/asks[0].px format
+- **GRVT**: `v1.mini.s` stream - best_bid_price/best_ask_price from mini ticker
+- **Reya**: Model AMM - brak orderbooka CLOB, tylko ceny z WebSocket
 - **Pacifica**: `source: 'book'` with agg_level=1 - data.l[0] for bids, data.l[1] for asks
+- **NADO**: REST API polling `GET /v2/orderbook?ticker_id={id}&depth=1` - 11 proxy rotation, 429 req/sec
 
 ## Running
 1. Backend: `cd server && node server.js`
 2. Frontend: `npm run dev`
+
+## Recent Changes (2026-02-03)
+- Added NADO exchange with REST API polling (23 markets, $514M volume)
+- NADO uses 11 proxy rotation for 429 req/sec effective rate
+- GRVT fully working with API key authentication and mini ticker orderbook
+- Confirmed Reya uses AMM model - no CLOB orderbook available
 
 ## Recent Changes (2026-02-02)
 - Added Volume column with sorting by Symbol/Volume

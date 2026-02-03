@@ -35,7 +35,7 @@ interface PriceData {
   fundingRate?: string;
 }
 
-const EXCHANGES = ['Lighter', 'Extended', 'Paradex', 'GRVT', 'Reya', 'Pacifica'] as const;
+const EXCHANGES = ['Lighter', 'Extended', 'Paradex', 'GRVT', 'Reya', 'Pacifica', 'NADO'] as const;
 type ExchangeName = typeof EXCHANGES[number];
 
 const EXCHANGE_COLORS: Record<ExchangeName, string> = {
@@ -45,6 +45,7 @@ const EXCHANGE_COLORS: Record<ExchangeName, string> = {
   GRVT: 'text-orange-400',
   Reya: 'text-cyan-400',
   Pacifica: 'text-pink-400',
+  NADO: 'text-yellow-400',
 };
 
 const CryptoAggregator = () => {
@@ -72,7 +73,7 @@ const CryptoAggregator = () => {
         setConnectionStatus('connected');
         toast({
           title: "Połączono",
-          description: "Odbieranie danych z 6 giełd w czasie rzeczywistym",
+          description: "Odbieranie danych z 7 giełd w czasie rzeczywistym",
         });
       };
 
@@ -257,7 +258,7 @@ const CryptoAggregator = () => {
         <div>
           <h2 className="text-2xl font-bold text-foreground mb-4 flex items-center gap-2">
             <TrendingUpIcon className="w-6 h-6" />
-            Statystyki Giełd (6 Exchanges + Orderbook)
+            Statystyki Giełd (7 Exchanges + Orderbook)
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {exchangeStats.map((stat, idx) => (

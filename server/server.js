@@ -40,7 +40,17 @@ const EXCHANGES = {
     proxyEnv: 'Proxy_pacifica_public',
     allowNoProxy: true,
   },
+  nado: {
+    tickersUrl: 'https://archive.prod.nado.xyz/v2/tickers?market=perp',
+    orderbookUrl: 'https://gateway.prod.nado.xyz/v2/orderbook',
+    name: 'NADO',
+  },
 };
+
+let nadoMarkets = [];
+let nadoTickerData = new Map();
+let NADO_PROXIES = [];
+let nadoProxyIndex = 0;
 
 const LIGHTER_MARKETS = [
   'ETH', 'BTC', 'SOL', 'DOGE', '1000PEPE', 'WIF', 'WLD', 'XRP', 'LINK', 'AVAX',
@@ -94,6 +104,25 @@ function parseProxyString(proxyString) {
   }
   
   return null;
+}
+
+function initNadoProxies() {
+  NADO_PROXIES = [];
+  for (let i = 1; i <= 11; i++) {
+    const proxyStr = process.env[`Nado_proxy${i}`];
+    if (proxyStr) {
+      const parsed = parseProxyString(proxyStr);
+      if (parsed) NADO_PROXIES.push(parsed);
+    }
+  }
+  console.log(`NADO: Initialized ${NADO_PROXIES.length} proxies for rotation`);
+}
+
+function getNadoProxy() {
+  if (NADO_PROXIES.length === 0) return null;
+  const proxy = NADO_PROXIES[nadoProxyIndex];
+  nadoProxyIndex = (nadoProxyIndex + 1) % NADO_PROXIES.length;
+  return proxy;
 }
 
 function getProxyAgent(exchangeKey, skipProxy = false) {
@@ -1519,6 +1548,162 @@ wss.on('connection', (ws) => {
   });
 });
 
+async function fetchNadoTickers() {
+  try {
+    console.log('NADO: Fetching tickers...');
+    const proxyUrl = getNadoProxy();
+    const options = {};
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
+    
+    const response = await fetch(EXCHANGES.nado.tickersUrl, options);
+    const data = await response.json();
+    
+    nadoMarkets = [];
+    nadoTickerData.clear();
+    
+    for (const [tickerId, tickerInfo] of Object.entries(data)) {
+      nadoMarkets.push(tickerId);
+      nadoTickerData.set(tickerId, tickerInfo);
+      
+      const symbol = normalizeSymbol(tickerInfo.base_currency || tickerId.split('-')[0]);
+      const cacheKey = `nado_${symbol}`;
+      
+      const priceData = {
+        exchange: 'NADO',
+        symbol: symbol,
+        price: tickerInfo.last_price?.toString() || null,
+        volume: tickerInfo.quote_volume?.toString() || null,
+        priceChange: tickerInfo.price_change_percent_24h?.toString() || null,
+        timestamp: Date.now()
+      };
+      
+      priceCache.set(cacheKey, priceData);
+      broadcast(priceData);
+    }
+    
+    console.log(`NADO: Loaded ${nadoMarkets.length} markets`);
+    return nadoMarkets;
+  } catch (error) {
+    console.error('NADO: Error fetching tickers:', error.message);
+    return [];
+  }
+}
+
+async function fetchNadoOrderbook(tickerId) {
+  try {
+    const proxyUrl = getNadoProxy();
+    const options = {};
+    if (proxyUrl) {
+      options.agent = new HttpsProxyAgent(proxyUrl);
+    }
+    
+    const url = `${EXCHANGES.nado.orderbookUrl}?ticker_id=${encodeURIComponent(tickerId)}&depth=1`;
+    const response = await fetch(url, options);
+    
+    if (!response.ok) {
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    const tickerInfo = nadoTickerData.get(tickerId);
+    const symbol = normalizeSymbol(tickerInfo?.base_currency || tickerId.split('-')[0]);
+    const cacheKey = `nado_${symbol}`;
+    
+    const bids = data.bids || [];
+    const asks = data.asks || [];
+    
+    const bestBid = bids.length > 0 ? bids[0][0] : null;
+    const bestAsk = asks.length > 0 ? asks[0][0] : null;
+    const bidSize = bids.length > 0 ? bids[0][1] : null;
+    const askSize = asks.length > 0 ? asks[0][1] : null;
+    const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+    
+    const orderbookData = {
+      bestBid: bestBid?.toString(),
+      bestAsk: bestAsk?.toString(),
+      bidSize: bidSize?.toString(),
+      askSize: askSize?.toString(),
+      spread
+    };
+    
+    orderbookCache.set(cacheKey, orderbookData);
+    
+    const existingPrice = priceCache.get(cacheKey);
+    if (existingPrice) {
+      const updatedData = { ...existingPrice, ...orderbookData };
+      priceCache.set(cacheKey, updatedData);
+      broadcast(updatedData);
+    } else {
+      broadcast({
+        exchange: 'NADO',
+        symbol: symbol,
+        price: tickerInfo?.last_price?.toString() || null,
+        ...orderbookData,
+        timestamp: Date.now()
+      });
+    }
+    
+    return data;
+  } catch (error) {
+    return null;
+  }
+}
+
+let nadoPollingActive = false;
+const NADO_REQUESTS_PER_SECOND = 39;
+const NADO_REQUEST_INTERVAL = 1000 / NADO_REQUESTS_PER_SECOND;
+
+async function startNadoPolling() {
+  if (nadoPollingActive) return;
+  nadoPollingActive = true;
+  
+  console.log(`NADO: Starting orderbook polling (${NADO_REQUESTS_PER_SECOND} req/sec with ${NADO_PROXIES.length} proxies)`);
+  console.log(`NADO: Effective rate: ${NADO_REQUESTS_PER_SECOND * NADO_PROXIES.length} req/sec`);
+  
+  let marketIndex = 0;
+  
+  const pollNext = async () => {
+    if (!nadoPollingActive || nadoMarkets.length === 0) {
+      setTimeout(pollNext, 1000);
+      return;
+    }
+    
+    const tickerId = nadoMarkets[marketIndex];
+    marketIndex = (marketIndex + 1) % nadoMarkets.length;
+    
+    await fetchNadoOrderbook(tickerId);
+    
+    setTimeout(pollNext, NADO_REQUEST_INTERVAL);
+  };
+  
+  const numWorkers = Math.min(NADO_PROXIES.length, 11);
+  for (let i = 0; i < numWorkers; i++) {
+    setTimeout(() => pollNext(), i * (NADO_REQUEST_INTERVAL / numWorkers));
+  }
+  
+  setInterval(async () => {
+    await fetchNadoTickers();
+  }, 60000);
+}
+
+async function connectNado() {
+  initNadoProxies();
+  
+  if (NADO_PROXIES.length === 0) {
+    console.log('NADO: No proxies configured, skipping');
+    return;
+  }
+  
+  await fetchNadoTickers();
+  
+  if (nadoMarkets.length > 0) {
+    startNadoPolling();
+  }
+}
+
 async function start() {
   paradexMarkets = await fetchParadexMarkets();
   pacificaMarkets = await fetchPacificaMarkets();
@@ -1534,6 +1719,7 @@ async function start() {
     connectGrvt();
     connectReya();
     connectPacifica();
+    connectNado();
   });
 }
 
