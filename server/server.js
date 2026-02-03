@@ -653,7 +653,7 @@ function connectExtendedOrderbook() {
   const ws = new WebSocket(orderbookUrl, { ...baseOptions });
   let extMsgCount = 0;
   
-  // Maintain orderbook state per market (for delta updates)
+  // Maintain orderbook state per market (for SNAPSHOT/DELTA updates)
   const extendedOrderbooks = new Map();
   
   ws.on('open', () => {
@@ -666,15 +666,16 @@ function connectExtendedOrderbook() {
       msgCounters.extended_orderbook++;
       const msg = JSON.parse(rawData.toString());
       
+      // Log first 5 messages for debugging
+      if (extMsgCount <= 5) {
+        console.log(`Extended OB sample ${extMsgCount}:`, JSON.stringify(msg).substring(0, 300));
+      }
       
       const data = msg.data || msg;
       const symbol = data.m || msg.market || msg.symbol || data.market;
       const msgType = msg.type || data.t; // SNAPSHOT or DELTA
       
-      if (!symbol) {
-        if (extMsgCount <= 5) console.log('Extended: No symbol found in message');
-        return;
-      }
+      if (!symbol) return;
       
       const normalizedSymbol = normalizeSymbol(symbol);
       const cacheKey = `extended_${normalizedSymbol}`;
@@ -688,29 +689,32 @@ function connectExtendedOrderbook() {
       const bidsArray = data.b || data.bids || [];
       const asksArray = data.a || data.asks || [];
       
-      // Process updates: format is [{p: "price", q: "quantity"}, ...]
-      // Negative quantity means remove, positive means add/update
+      // SNAPSHOT clears state, DELTA updates incrementally
       if (msgType === 'SNAPSHOT') {
         obState.bids.clear();
         obState.asks.clear();
       }
       
+      // Process bids: negative qty = remove, positive = add/update
       for (const bid of bidsArray) {
         const price = bid.p || bid.price;
         const priceNum = parseFloat(price);
         const qty = parseFloat(bid.q || bid.size || 0);
-        if (qty <= 0 || priceNum <= 0 || isNaN(priceNum)) {
+        if (isNaN(priceNum) || priceNum <= 0) continue;
+        if (qty <= 0) {
           obState.bids.delete(price);
         } else {
           obState.bids.set(price, qty);
         }
       }
       
+      // Process asks: negative qty = remove, positive = add/update
       for (const ask of asksArray) {
         const price = ask.p || ask.price;
         const priceNum = parseFloat(price);
         const qty = parseFloat(ask.q || ask.size || 0);
-        if (qty <= 0 || priceNum <= 0 || isNaN(priceNum)) {
+        if (isNaN(priceNum) || priceNum <= 0) continue;
+        if (qty <= 0) {
           obState.asks.delete(price);
         } else {
           obState.asks.set(price, qty);
@@ -723,20 +727,15 @@ function connectExtendedOrderbook() {
       const sortedAsks = [...obState.asks.entries()]
         .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
       
-      let bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
-      let bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
+      const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
+      const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
       const bidSize = sortedBids.length > 0 ? sortedBids[0][1] : null;
       const askSize = sortedAsks.length > 0 ? sortedAsks[0][1] : null;
       
-      // Validate prices - must be positive and not NaN
-      if (bestBid !== null && (isNaN(bestBid) || bestBid <= 0)) bestBid = null;
-      if (bestAsk !== null && (isNaN(bestAsk) || bestAsk <= 0)) bestAsk = null;
-      
+      // Skip if no data at all
       if (!bestBid && !bestAsk) return;
       
-      // Spread must be positive (ask > bid)
-      if (bestBid && bestAsk && bestAsk < bestBid) return;
-      
+      // NO validation of ask > bid - allow all data through
       const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
       
       const orderbookData = {
@@ -763,7 +762,7 @@ function connectExtendedOrderbook() {
         });
       }
     } catch (error) {
-      // Silently ignore parse errors
+      if (extMsgCount <= 5) console.error('Extended OB parse error:', error.message);
     }
   });
   
