@@ -94,6 +94,11 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
 ## Recent Changes (2026-02-03)
+- Added heartbeat monitoring (30s interval) - logs status of all 7 exchange connections
+- Added ping/pong keepalive for all WebSocket connections to prevent silent disconnects
+- Added auto-reconnect for dead connections detected by heartbeat
+- Paradex orderbook refresh rate: 50ms (stable)
+- GRVT mini ticker: 500ms (API minimum)
 - Fixed Extended orderbook: added price validation (>0, no NaN) and spread validation (ask > bid)
 - Extended now streams 20+ markets automatically: BTC-USD, ETH-USD, SOL-USD, DOGE-USD, LTC-USD, BNB-USD, etc.
 - Added NADO exchange with REST API polling (23 markets, $514M volume)
