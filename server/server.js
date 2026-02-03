@@ -646,23 +646,13 @@ function connectExtendedOrderbook() {
   };
   if (agent) baseOptions.agent = agent;
   
-  // Use single orderbooks endpoint (plural) as per attached code reference
-  const orderbookUrl = 'wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks';
-  console.log(`Extended Orderbook: Connecting to ${orderbookUrl}...`);
+  // Use orderbooks with depth=1 to get ONLY SNAPSHOT (no DELTA problems)
+  // This gives best bid/ask only, always as snapshot, 100ms push frequency
+  const orderbookUrl = 'wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks?depth=1';
+  console.log(`Extended Orderbook: Connecting to ${orderbookUrl} (depth=1 = SNAPSHOT only)...`);
   
   const ws = new WebSocket(orderbookUrl, { ...baseOptions });
   let extMsgCount = 0;
-  
-  // Maintain orderbook state per market (for SNAPSHOT/DELTA updates)
-  // Each side (bid/ask) has independent state and timestamp
-  const extendedOrderbooks = new Map();
-  const extendedBidState = new Map(); // {symbol: {price, size, timestamp}}
-  const extendedAskState = new Map(); // {symbol: {price, size, timestamp}}
-  // Throttle broadcasts per symbol (max 1 per 100ms)
-  const extendedLastBroadcast = new Map();
-  const EXTENDED_THROTTLE_MS = 100;
-  let extNegativeSpreadCount = 0;
-  let extValidSpreadCount = 0;
   
   ws.on('open', () => {
     console.log('Extended Orderbook: Connected');
@@ -674,152 +664,51 @@ function connectExtendedOrderbook() {
       msgCounters.extended_orderbook++;
       const msg = JSON.parse(rawData.toString());
       
-      // DEBUG: Log first BTC message to see format
+      // DEBUG: Log first 3 messages to verify SNAPSHOT only (no DELTA with depth=1)
       if (extMsgCount <= 3) {
-        console.log('Extended RAW msg:', JSON.stringify(msg).substring(0, 500));
+        console.log('Extended SNAPSHOT msg:', JSON.stringify(msg).substring(0, 400));
       }
       
       const data = msg.data || msg;
       const symbol = data.m || msg.market || msg.symbol || data.market;
-      const msgType = msg.type || data.t; // SNAPSHOT or DELTA
       
       if (!symbol) return;
+      
+      // With depth=1, we ALWAYS get SNAPSHOT with best bid/ask only (no DELTA)
+      // Just take first element directly - no accumulation needed
+      const bidsArray = data.b || data.bids || [];
+      const asksArray = data.a || data.asks || [];
+      
+      if (bidsArray.length === 0 && asksArray.length === 0) return;
+      
+      // Get first (best) bid and ask directly
+      const bestBid = bidsArray[0];
+      const bestAsk = asksArray[0];
+      
+      const bidPrice = bestBid ? parseFloat(bestBid.p || bestBid.price) : null;
+      const askPrice = bestAsk ? parseFloat(bestAsk.p || bestAsk.price) : null;
+      const bidSize = bestBid ? parseFloat(bestBid.q || bestBid.size) : null;
+      const askSize = bestAsk ? parseFloat(bestAsk.q || bestAsk.size) : null;
+      
+      // Validate prices
+      if ((!bidPrice || bidPrice <= 0) && (!askPrice || askPrice <= 0)) return;
+      
+      const finalBid = (bidPrice && bidPrice > 0) ? bidPrice : null;
+      const finalAsk = (askPrice && askPrice > 0) ? askPrice : null;
+      const finalBidSize = (finalBid && bidSize > 0) ? bidSize : null;
+      const finalAskSize = (finalAsk && askSize > 0) ? askSize : null;
+      
+      // Skip if spread is inverted (ask < bid = bad data)
+      if (finalBid && finalAsk && finalAsk < finalBid) {
+        return; // Skip bad data
+      }
       
       const normalizedSymbol = normalizeSymbol(symbol);
       const cacheKey = `extended_${normalizedSymbol}`;
       
-      // Get or create orderbook state for this market
-      if (!extendedOrderbooks.has(symbol)) {
-        extendedOrderbooks.set(symbol, { bids: new Map(), asks: new Map() });
-      }
-      const obState = extendedOrderbooks.get(symbol);
-      
-      const bidsArray = data.b || data.bids || [];
-      const asksArray = data.a || data.asks || [];
-      const updateTime = Date.now();
-      
-      // SNAPSHOT clears state, DELTA updates incrementally
-      if (msgType === 'SNAPSHOT') {
-        obState.bids.clear();
-        obState.asks.clear();
-      }
-      
-      // Track if each side was updated in this message
-      let bidUpdated = false;
-      let askUpdated = false;
-      
-      // Process bids: negative qty = remove, positive = add/update
-      for (const bid of bidsArray) {
-        const price = bid.p || bid.price;
-        const priceNum = parseFloat(price);
-        const qty = parseFloat(bid.q || bid.size || 0);
-        if (isNaN(priceNum) || priceNum <= 0) continue;
-        bidUpdated = true;
-        if (qty <= 0) {
-          obState.bids.delete(price);
-        } else {
-          obState.bids.set(price, qty);
-        }
-      }
-      
-      // Process asks: negative qty = remove, positive = add/update
-      for (const ask of asksArray) {
-        const price = ask.p || ask.price;
-        const priceNum = parseFloat(price);
-        const qty = parseFloat(ask.q || ask.size || 0);
-        if (isNaN(priceNum) || priceNum <= 0) continue;
-        askUpdated = true;
-        if (qty <= 0) {
-          obState.asks.delete(price);
-        } else {
-          obState.asks.set(price, qty);
-        }
-      }
-      
-      // Get best bid (highest price) and best ask (lowest price)
-      const sortedBids = [...obState.bids.entries()]
-        .sort((a, b) => parseFloat(b[0]) - parseFloat(a[0]));
-      const sortedAsks = [...obState.asks.entries()]
-        .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
-      
-      // Update independent state for each side ONLY if that side changed
-      if (bidUpdated && sortedBids.length > 0) {
-        extendedBidState.set(symbol, {
-          price: parseFloat(sortedBids[0][0]),
-          size: sortedBids[0][1],
-          timestamp: updateTime
-        });
-      }
-      if (askUpdated && sortedAsks.length > 0) {
-        extendedAskState.set(symbol, {
-          price: parseFloat(sortedAsks[0][0]),
-          size: sortedAsks[0][1],
-          timestamp: updateTime
-        });
-      }
-      
-      // Get latest state from independent caches (each side has its own timestamp)
-      const bidState = extendedBidState.get(symbol);
-      const askState = extendedAskState.get(symbol);
-      
-      if (!bidState && !askState) return;
-      
-      const STALE_TIMEOUT_MS = 5000; // 5 seconds
-      const now = Date.now();
-      
-      // Check if each side is stale (not updated for 5+ seconds)
-      const bidIsStale = bidState && (now - bidState.timestamp > STALE_TIMEOUT_MS);
-      const askIsStale = askState && (now - askState.timestamp > STALE_TIMEOUT_MS);
-      
-      // Use fresh values only
-      let finalBid = (bidState && !bidIsStale) ? bidState.price : null;
-      let finalAsk = (askState && !askIsStale) ? askState.price : null;
-      let finalBidSize = (bidState && !bidIsStale) ? bidState.size : null;
-      let finalAskSize = (askState && !askIsStale) ? askState.size : null;
-      
-      // If one side is stale but other is fresh, use mid-price approach
-      if (finalBid && !finalAsk && askState) {
-        // Ask is stale, estimate from bid + typical spread
-        finalAsk = finalBid * 1.001; // 0.1% spread estimate
-        finalAskSize = null;
-      } else if (finalAsk && !finalBid && bidState) {
-        // Bid is stale, estimate from ask - typical spread
-        finalBid = finalAsk * 0.999;
-        finalBidSize = null;
-      }
-      
       if (!finalBid && !finalAsk) return;
       
-      // VALIDATION: If spread is negative, swap bid and ask (temporary data race)
-      if (finalBid && finalAsk && finalAsk < finalBid) {
-        extNegativeSpreadCount++;
-        // Swap to fix - one side is just delayed
-        [finalBid, finalAsk] = [finalAsk, finalBid];
-        [finalBidSize, finalAskSize] = [finalAskSize, finalBidSize];
-        if (extNegativeSpreadCount % 1000 === 1) {
-          console.log(`Extended: Fixed inverted spread #${extNegativeSpreadCount} for ${symbol}`);
-        }
-      } else {
-        extValidSpreadCount++;
-      }
-      
       const spread = finalBid && finalAsk ? (finalAsk - finalBid).toFixed(4) : null;
-      
-      // THROTTLE: Max 1 broadcast per symbol per 100ms
-      const broadcastTime = Date.now();
-      const lastTime = extendedLastBroadcast.get(symbol) || 0;
-      if (broadcastTime - lastTime < EXTENDED_THROTTLE_MS) {
-        // Update cache but don't broadcast yet
-        orderbookCache.set(cacheKey, {
-          bestBid: finalBid?.toString(),
-          bestAsk: finalAsk?.toString(),
-          bidSize: finalBidSize?.toString(),
-          askSize: finalAskSize?.toString(),
-          spread
-        });
-        return;
-      }
-      extendedLastBroadcast.set(symbol, broadcastTime);
       
       const orderbookData = {
         bestBid: finalBid?.toString(),
@@ -848,17 +737,6 @@ function connectExtendedOrderbook() {
       if (extMsgCount <= 5) console.error('Extended OB parse error:', error.message);
     }
   });
-  
-  // Log Extended spread stats every 30s
-  setInterval(() => {
-    if (extNegativeSpreadCount > 0 || extValidSpreadCount > 0) {
-      const total = extNegativeSpreadCount + extValidSpreadCount;
-      const pct = total > 0 ? ((extValidSpreadCount / total) * 100).toFixed(1) : 0;
-      console.log(`Extended spread stats: ${extValidSpreadCount} valid, ${extNegativeSpreadCount} negative (${pct}% valid)`);
-      extNegativeSpreadCount = 0;
-      extValidSpreadCount = 0;
-    }
-  }, 30000);
   
   ws.on('error', (err) => {
     console.error('Extended Orderbook: Error', err.message);
