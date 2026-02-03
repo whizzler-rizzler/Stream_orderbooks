@@ -674,6 +674,11 @@ function connectExtendedOrderbook() {
       msgCounters.extended_orderbook++;
       const msg = JSON.parse(rawData.toString());
       
+      // DEBUG: Log first BTC message to see format
+      if (extMsgCount <= 3) {
+        console.log('Extended RAW msg:', JSON.stringify(msg).substring(0, 500));
+      }
+      
       const data = msg.data || msg;
       const symbol = data.m || msg.market || msg.symbol || data.market;
       const msgType = msg.type || data.t; // SNAPSHOT or DELTA
