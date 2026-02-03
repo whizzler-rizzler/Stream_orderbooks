@@ -5,7 +5,7 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 7 zdecentralizowanych gie�
 
 ## Current Status (February 2026)
 - **Lighter**: $3B+ volume, 97 markets, **pełny BID/ASK orderbook** ✓
-- **Extended**: 79 markets, **orderbook działający** (SNAPSHOT + DELTA) ✓
+- **Extended**: 79 markets, **pełny BID/ASK orderbook** ✓ (depth=1 SNAPSHOT only, ~1$ spread dla BTC)
 - **Paradex**: 108 markets (PERP), **orderbook działający** (inserts format with mid price fallback) ✓
 - **GRVT**: 82 markets, **pełny BID/ASK z mini ticker** ✓ (uwierzytelnienie przez API key)
 - **Reya**: 86 markets, $175M volume, **tylko ceny** (WebSocket API nie udostępnia orderbook - model AMM)
@@ -29,7 +29,7 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 7 zdecentralizowanych gie�
 | Exchange | WebSocket URL | Orderbook Status |
 |----------|---------------|------------------|
 | Lighter | wss://mainnet.zklighter.elliot.ai/stream | ✓ Working - sorted bids/asks |
-| Extended | wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks | ✓ Working - SNAPSHOT/DELTA |
+| Extended | wss://api.starknet.extended.exchange/stream.extended.exchange/v1/orderbooks?depth=1 | ✓ Working - SNAPSHOT only (~1$ spread BTC) |
 | Paradex | wss://ws.api.prod.paradex.trade/v1 | ✓ Working - inserts format |
 | GRVT | wss://market-data.grvt.io/ws/full | ✗ Error 1107 |
 | Reya | wss://ws.reya.xyz | Subscribed, no depth data |
