@@ -670,8 +670,9 @@ function connectExtendedOrderbook() {
       
       for (const bid of bidsArray) {
         const price = bid.p || bid.price;
+        const priceNum = parseFloat(price);
         const qty = parseFloat(bid.q || bid.size || 0);
-        if (qty <= 0) {
+        if (qty <= 0 || priceNum <= 0 || isNaN(priceNum)) {
           obState.bids.delete(price);
         } else {
           obState.bids.set(price, qty);
@@ -680,8 +681,9 @@ function connectExtendedOrderbook() {
       
       for (const ask of asksArray) {
         const price = ask.p || ask.price;
+        const priceNum = parseFloat(price);
         const qty = parseFloat(ask.q || ask.size || 0);
-        if (qty <= 0) {
+        if (qty <= 0 || priceNum <= 0 || isNaN(priceNum)) {
           obState.asks.delete(price);
         } else {
           obState.asks.set(price, qty);
@@ -700,6 +702,9 @@ function connectExtendedOrderbook() {
       const askSize = sortedAsks.length > 0 ? sortedAsks[0][1] : null;
       
       if (!bestBid && !bestAsk) return;
+      
+      // Spread must be positive (ask > bid), skip invalid data
+      if (bestBid && bestAsk && bestAsk < bestBid) return;
       
       const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
       
