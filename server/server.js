@@ -1824,4 +1824,44 @@ process.on('SIGTERM', () => {
   });
 });
 
+// Heartbeat: log connection status every 30s and send ping to keep connections alive
+setInterval(() => {
+  const status = [];
+  const exchanges = ['lighter', 'extended', 'extended_orderbook', 'paradex', 'grvt', 'reya', 'pacifica'];
+  
+  for (const name of exchanges) {
+    const ws = exchangeSockets.get(name);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      status.push(`${name}:OK`);
+      // Send ping to keep connection alive
+      try {
+        ws.ping();
+      } catch (e) {
+        // Ignore ping errors
+      }
+    } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+      status.push(`${name}:CONNECTING`);
+    } else {
+      status.push(`${name}:DEAD`);
+    }
+  }
+  
+  console.log(`Heartbeat: ${status.join(', ')}`);
+  
+  // Force reconnect dead connections
+  for (const name of exchanges) {
+    const ws = exchangeSockets.get(name);
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+      console.log(`Heartbeat: Forcing reconnect for ${name}`);
+      if (name === 'lighter') connectLighter();
+      else if (name === 'extended') connectExtended();
+      else if (name === 'extended_orderbook') connectExtendedOrderbook();
+      else if (name === 'paradex') connectParadex();
+      else if (name === 'grvt') connectGrvt();
+      else if (name === 'reya') connectReya();
+      else if (name === 'pacifica') connectPacifica();
+    }
+  }
+}, 30000);
+
 start();
