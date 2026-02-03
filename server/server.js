@@ -869,11 +869,11 @@ function connectParadex() {
         params: { channel: `trades.${market}` },
         id: index + 2,
       }));
-      // Use snapshot feed type with 100ms refresh rate per documentation
+      // Use snapshot feed type with 25ms refresh rate (fastest available)
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
-        params: { channel: `order_book.${market}.snapshot@15@100ms` },
+        params: { channel: `order_book.${market}.snapshot@15@25ms` },
         id: index + 1000,
       }));
     });
@@ -1184,19 +1184,19 @@ async function connectGrvt() {
       'BTC_USDT_Perp', 'ETH_USDT_Perp', 'SOL_USDT_Perp'
     ];
     
-    const feedMini = markets.map(m => `${m}@500`);
+    const feedMini = markets.map(m => `${m}@500`); // 500ms is minimum allowed by GRVT API
     
     ws.send(JSON.stringify({
       jsonrpc: '2.0',
       id: 1,
       method: 'subscribe',
       params: {
-        stream: 'v1.mini.s',
+        stream: 'v1.mini.d', // delta stream for faster updates (sends only changes)
         selectors: feedMini
       }
     }));
     
-    console.log(`GRVT: Subscribed to ${markets.length} markets (mini ticker with bid/ask)`);
+    console.log(`GRVT: Subscribed to ${markets.length} markets (mini ticker delta stream)`);
   });
   
   ws.on('message', (rawData) => {
