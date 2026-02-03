@@ -654,10 +654,13 @@ function connectExtendedOrderbook() {
   let extMsgCount = 0;
   
   // Maintain orderbook state per market (for SNAPSHOT/DELTA updates)
+  // Each side (bid/ask) has independent state and timestamp
   const extendedOrderbooks = new Map();
-  // Throttle broadcasts per symbol (max 1 per 200ms for stability)
+  const extendedBidState = new Map(); // {symbol: {price, size, timestamp}}
+  const extendedAskState = new Map(); // {symbol: {price, size, timestamp}}
+  // Throttle broadcasts per symbol (max 1 per 100ms)
   const extendedLastBroadcast = new Map();
-  const EXTENDED_THROTTLE_MS = 200;
+  const EXTENDED_THROTTLE_MS = 100;
   let extNegativeSpreadCount = 0;
   let extValidSpreadCount = 0;
   
@@ -688,6 +691,7 @@ function connectExtendedOrderbook() {
       
       const bidsArray = data.b || data.bids || [];
       const asksArray = data.a || data.asks || [];
+      const updateTime = Date.now();
       
       // SNAPSHOT clears state, DELTA updates incrementally
       if (msgType === 'SNAPSHOT') {
@@ -695,12 +699,17 @@ function connectExtendedOrderbook() {
         obState.asks.clear();
       }
       
+      // Track if each side was updated in this message
+      let bidUpdated = false;
+      let askUpdated = false;
+      
       // Process bids: negative qty = remove, positive = add/update
       for (const bid of bidsArray) {
         const price = bid.p || bid.price;
         const priceNum = parseFloat(price);
         const qty = parseFloat(bid.q || bid.size || 0);
         if (isNaN(priceNum) || priceNum <= 0) continue;
+        bidUpdated = true;
         if (qty <= 0) {
           obState.bids.delete(price);
         } else {
@@ -714,6 +723,7 @@ function connectExtendedOrderbook() {
         const priceNum = parseFloat(price);
         const qty = parseFloat(ask.q || ask.size || 0);
         if (isNaN(priceNum) || priceNum <= 0) continue;
+        askUpdated = true;
         if (qty <= 0) {
           obState.asks.delete(price);
         } else {
@@ -727,27 +737,41 @@ function connectExtendedOrderbook() {
       const sortedAsks = [...obState.asks.entries()]
         .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
       
-      const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
-      const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
-      const bidSize = sortedBids.length > 0 ? sortedBids[0][1] : null;
-      const askSize = sortedAsks.length > 0 ? sortedAsks[0][1] : null;
+      // Update independent state for each side ONLY if that side changed
+      if (bidUpdated && sortedBids.length > 0) {
+        extendedBidState.set(symbol, {
+          price: parseFloat(sortedBids[0][0]),
+          size: sortedBids[0][1],
+          timestamp: updateTime
+        });
+      }
+      if (askUpdated && sortedAsks.length > 0) {
+        extendedAskState.set(symbol, {
+          price: parseFloat(sortedAsks[0][0]),
+          size: sortedAsks[0][1],
+          timestamp: updateTime
+        });
+      }
       
-      // Skip if no data at all
-      if (!bestBid && !bestAsk) return;
+      // Get latest state from independent caches (each side has its own timestamp)
+      const bidState = extendedBidState.get(symbol);
+      const askState = extendedAskState.get(symbol);
       
-      let finalBid = bestBid;
-      let finalAsk = bestAsk;
-      let finalBidSize = bidSize;
-      let finalAskSize = askSize;
+      if (!bidState && !askState) return;
       
-      // FIX: If spread is negative, swap bid and ask (data race condition)
+      let finalBid = bidState?.price || null;
+      let finalAsk = askState?.price || null;
+      let finalBidSize = bidState?.size || null;
+      let finalAskSize = askState?.size || null;
+      
+      // VALIDATION: If spread is negative, swap bid and ask (temporary data race)
       if (finalBid && finalAsk && finalAsk < finalBid) {
         extNegativeSpreadCount++;
-        // Swap them to fix the inversion
+        // Swap to fix - one side is just delayed
         [finalBid, finalAsk] = [finalAsk, finalBid];
         [finalBidSize, finalAskSize] = [finalAskSize, finalBidSize];
         if (extNegativeSpreadCount % 1000 === 1) {
-          console.log(`Extended: Fixed inverted spread #${extNegativeSpreadCount} for ${symbol}: swapped bid/ask`);
+          console.log(`Extended: Fixed inverted spread #${extNegativeSpreadCount} for ${symbol}`);
         }
       } else {
         extValidSpreadCount++;
@@ -755,10 +779,10 @@ function connectExtendedOrderbook() {
       
       const spread = finalBid && finalAsk ? (finalAsk - finalBid).toFixed(4) : null;
       
-      // THROTTLE: Max 1 broadcast per symbol per 200ms
-      const now = Date.now();
+      // THROTTLE: Max 1 broadcast per symbol per 100ms
+      const broadcastTime = Date.now();
       const lastTime = extendedLastBroadcast.get(symbol) || 0;
-      if (now - lastTime < EXTENDED_THROTTLE_MS) {
+      if (broadcastTime - lastTime < EXTENDED_THROTTLE_MS) {
         // Update cache but don't broadcast yet
         orderbookCache.set(cacheKey, {
           bestBid: finalBid?.toString(),
@@ -769,7 +793,7 @@ function connectExtendedOrderbook() {
         });
         return;
       }
-      extendedLastBroadcast.set(symbol, now);
+      extendedLastBroadcast.set(symbol, broadcastTime);
       
       const orderbookData = {
         bestBid: finalBid?.toString(),
