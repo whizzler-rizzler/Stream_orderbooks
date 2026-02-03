@@ -655,6 +655,11 @@ function connectExtendedOrderbook() {
   
   // Maintain orderbook state per market (for SNAPSHOT/DELTA updates)
   const extendedOrderbooks = new Map();
+  // Throttle broadcasts per symbol (max 1 per 50ms)
+  const extendedLastBroadcast = new Map();
+  const EXTENDED_THROTTLE_MS = 50;
+  let extNegativeSpreadCount = 0;
+  let extValidSpreadCount = 0;
   
   ws.on('open', () => {
     console.log('Extended Orderbook: Connected');
@@ -665,11 +670,6 @@ function connectExtendedOrderbook() {
       extMsgCount++;
       msgCounters.extended_orderbook++;
       const msg = JSON.parse(rawData.toString());
-      
-      // Log first 5 messages for debugging
-      if (extMsgCount <= 5) {
-        console.log(`Extended OB sample ${extMsgCount}:`, JSON.stringify(msg).substring(0, 300));
-      }
       
       const data = msg.data || msg;
       const symbol = data.m || msg.market || msg.symbol || data.market;
@@ -735,8 +735,34 @@ function connectExtendedOrderbook() {
       // Skip if no data at all
       if (!bestBid && !bestAsk) return;
       
-      // NO validation of ask > bid - allow all data through
+      // VALIDATION: Skip if spread is negative (inconsistent state during fast updates)
+      if (bestBid && bestAsk && bestAsk < bestBid) {
+        extNegativeSpreadCount++;
+        // Log every 1000th negative spread for debugging
+        if (extNegativeSpreadCount % 1000 === 1) {
+          console.log(`Extended: Negative spread #${extNegativeSpreadCount} for ${symbol}: bid=${bestBid} ask=${bestAsk}`);
+        }
+        return; // Skip this update, wait for consistent state
+      }
+      
+      extValidSpreadCount++;
       const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+      
+      // THROTTLE: Max 1 broadcast per symbol per 50ms
+      const now = Date.now();
+      const lastTime = extendedLastBroadcast.get(symbol) || 0;
+      if (now - lastTime < EXTENDED_THROTTLE_MS) {
+        // Update cache but don't broadcast yet
+        orderbookCache.set(cacheKey, {
+          bestBid: bestBid?.toString(),
+          bestAsk: bestAsk?.toString(),
+          bidSize: bidSize?.toString(),
+          askSize: askSize?.toString(),
+          spread
+        });
+        return;
+      }
+      extendedLastBroadcast.set(symbol, now);
       
       const orderbookData = {
         bestBid: bestBid?.toString(),
@@ -765,6 +791,17 @@ function connectExtendedOrderbook() {
       if (extMsgCount <= 5) console.error('Extended OB parse error:', error.message);
     }
   });
+  
+  // Log Extended spread stats every 30s
+  setInterval(() => {
+    if (extNegativeSpreadCount > 0 || extValidSpreadCount > 0) {
+      const total = extNegativeSpreadCount + extValidSpreadCount;
+      const pct = total > 0 ? ((extValidSpreadCount / total) * 100).toFixed(1) : 0;
+      console.log(`Extended spread stats: ${extValidSpreadCount} valid, ${extNegativeSpreadCount} negative (${pct}% valid)`);
+      extNegativeSpreadCount = 0;
+      extValidSpreadCount = 0;
+    }
+  }, 30000);
   
   ws.on('error', (err) => {
     console.error('Extended Orderbook: Error', err.message);
