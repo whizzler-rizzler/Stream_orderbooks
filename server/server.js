@@ -723,12 +723,19 @@ function connectExtendedOrderbook() {
       const sortedAsks = [...obState.asks.entries()]
         .sort((a, b) => parseFloat(a[0]) - parseFloat(b[0]));
       
-      const bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
-      const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
+      let bestBid = sortedBids.length > 0 ? parseFloat(sortedBids[0][0]) : null;
+      let bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0][0]) : null;
       const bidSize = sortedBids.length > 0 ? sortedBids[0][1] : null;
       const askSize = sortedAsks.length > 0 ? sortedAsks[0][1] : null;
       
+      // Validate prices - must be positive and not NaN
+      if (bestBid !== null && (isNaN(bestBid) || bestBid <= 0)) bestBid = null;
+      if (bestAsk !== null && (isNaN(bestAsk) || bestAsk <= 0)) bestAsk = null;
+      
       if (!bestBid && !bestAsk) return;
+      
+      // Spread must be positive (ask > bid)
+      if (bestBid && bestAsk && bestAsk < bestBid) return;
       
       const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
       
