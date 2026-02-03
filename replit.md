@@ -77,6 +77,22 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 1. Backend: `cd server && node server.js`
 2. Frontend: `npm run dev`
 
+## REST API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check, cache sizes |
+| `/api/prices` | GET | All prices from all exchanges |
+| `/api/orderbooks` | GET | All orderbook data (bid/ask/spread) |
+| `/api/exchanges` | GET | Exchange stats (volume, markets) |
+
+## WebSocket API
+- Connect to `ws://host:3001` for real-time stream
+- Messages sent immediately on new data (no rate limit)
+- Format: `{"exchange":"...", "symbol":"...", "price":"...", "bestBid":"...", "bestAsk":"...", "spread":"..."}`
+
+## Render Deployment
+See `server/RENDER_DEPLOY.md` for deployment guide.
+
 ## Recent Changes (2026-02-03)
 - Added NADO exchange with REST API polling (23 markets, $514M volume)
 - NADO uses 11 proxy rotation for 429 req/sec effective rate

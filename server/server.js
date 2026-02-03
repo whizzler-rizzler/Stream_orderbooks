@@ -1,6 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import http from 'http';
 import https from 'https';
+import zlib from 'zlib';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 
@@ -193,20 +194,121 @@ function extractVolumeNumber(source, prefer24h = false) {
   return undefined;
 }
 
+const responseCache = new Map();
+const CACHE_TTL = 100;
+
+function sendJSON(res, data, req, cacheKey = null) {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Response-Time', Date.now().toString());
+  
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  const useGzip = acceptEncoding.includes('gzip');
+  
+  if (cacheKey) {
+    const cached = responseCache.get(cacheKey);
+    if (cached && (Date.now() - cached.time) < CACHE_TTL) {
+      if (useGzip && cached.gzip) {
+        res.setHeader('Content-Encoding', 'gzip');
+        res.writeHead(200);
+        res.end(cached.gzip);
+        return;
+      } else if (cached.raw) {
+        res.writeHead(200);
+        res.end(cached.raw);
+        return;
+      }
+    }
+  }
+  
+  const json = JSON.stringify(data);
+  
+  if (useGzip) {
+    res.setHeader('Content-Encoding', 'gzip');
+    zlib.gzip(json, (err, compressed) => {
+      if (err) {
+        res.writeHead(500);
+        res.end('Compression error');
+        return;
+      }
+      if (cacheKey) {
+        responseCache.set(cacheKey, { gzip: compressed, raw: json, time: Date.now() });
+      }
+      res.writeHead(200);
+      res.end(compressed);
+    });
+  } else {
+    if (cacheKey) {
+      responseCache.set(cacheKey, { raw: json, time: Date.now() });
+    }
+    res.writeHead(200);
+    res.end(json);
+  }
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept-Encoding');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Connection', 'keep-alive');
   
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ 
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  
+  const url = req.url.split('?')[0];
+  
+  if (url === '/health') {
+    sendJSON(res, { 
       status: 'ok', 
       timestamp: new Date().toISOString(),
-      exchanges: Object.keys(EXCHANGES)
-    }));
+      exchanges: Object.keys(EXCHANGES),
+      cacheSize: priceCache.size,
+      orderbookSize: orderbookCache.size
+    }, req);
+  } else if (url === '/api/prices') {
+    const prices = Object.fromEntries(priceCache);
+    sendJSON(res, {
+      timestamp: Date.now(),
+      count: priceCache.size,
+      data: prices
+    }, req, 'prices');
+  } else if (url === '/api/orderbooks') {
+    const allKeys = new Set([...priceCache.keys(), ...orderbookCache.keys()]);
+    const combined = {};
+    allKeys.forEach(key => {
+      combined[key] = {
+        ...(priceCache.get(key) || {}),
+        ...(orderbookCache.get(key) || {})
+      };
+    });
+    sendJSON(res, {
+      timestamp: Date.now(),
+      count: allKeys.size,
+      data: combined
+    }, req, 'orderbooks');
+  } else if (url === '/api/exchanges') {
+    const exchangeNames = ['Lighter', 'Extended', 'Paradex', 'GRVT', 'Reya', 'Pacifica', 'NADO'];
+    const stats = exchangeNames.map(name => {
+      let volume = 0;
+      let markets = 0;
+      priceCache.forEach((data) => {
+        if (data.exchange === name) {
+          markets++;
+          if (data.volume) volume += parseFloat(data.volume) || 0;
+        }
+      });
+      return { name, volume, markets };
+    });
+    sendJSON(res, {
+      timestamp: Date.now(),
+      exchanges: stats
+    }, req, 'exchanges');
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Crypto Data Stream Aggregator Server - 6 Exchanges');
+    res.end('Crypto Aggregator API - Endpoints: /health, /api/prices, /api/orderbooks, /api/exchanges');
   }
 });
 
