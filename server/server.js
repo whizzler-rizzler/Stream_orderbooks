@@ -1592,9 +1592,19 @@ async function fetchNadoTickers() {
 }
 
 async function fetchNadoOrderbook(tickerId) {
+  const proxyUrl = getNadoProxy();
+  return fetchNadoOrderbookWithProxy(tickerId, proxyUrl);
+}
+
+async function fetchNadoOrderbookWithProxy(tickerId, proxyUrl) {
   try {
-    const proxyUrl = getNadoProxy();
-    const options = {};
+    const options = { 
+      timeout: 5000,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    };
     if (proxyUrl) {
       options.agent = new HttpsProxyAgent(proxyUrl);
     }
@@ -1606,7 +1616,12 @@ async function fetchNadoOrderbook(tickerId) {
       return null;
     }
     
-    const data = await response.json();
+    const text = await response.text();
+    if (text.startsWith('<!DOCTYPE') || text.startsWith('<html')) {
+      return null;
+    }
+    
+    const data = JSON.parse(text);
     
     const tickerInfo = nadoTickerData.get(tickerId);
     const symbol = normalizeSymbol(tickerInfo?.base_currency || tickerId.split('-')[0]);
@@ -1632,19 +1647,18 @@ async function fetchNadoOrderbook(tickerId) {
     orderbookCache.set(cacheKey, orderbookData);
     
     const existingPrice = priceCache.get(cacheKey);
-    if (existingPrice) {
-      const updatedData = { ...existingPrice, ...orderbookData };
-      priceCache.set(cacheKey, updatedData);
-      broadcast(updatedData);
-    } else {
-      broadcast({
-        exchange: 'NADO',
-        symbol: symbol,
-        price: tickerInfo?.last_price?.toString() || null,
-        ...orderbookData,
-        timestamp: Date.now()
-      });
-    }
+    const broadcastData = existingPrice 
+      ? { ...existingPrice, ...orderbookData }
+      : {
+          exchange: 'NADO',
+          symbol: symbol,
+          price: tickerInfo?.last_price?.toString() || null,
+          ...orderbookData,
+          timestamp: Date.now()
+        };
+    
+    priceCache.set(cacheKey, broadcastData);
+    broadcast(broadcastData);
     
     return data;
   } catch (error) {
@@ -1653,36 +1667,53 @@ async function fetchNadoOrderbook(tickerId) {
 }
 
 let nadoPollingActive = false;
-const NADO_REQUESTS_PER_SECOND = 39;
-const NADO_REQUEST_INTERVAL = 1000 / NADO_REQUESTS_PER_SECOND;
+let nadoStats = { requests: 0, success: 0, errors: 0, lastReset: Date.now() };
 
 async function startNadoPolling() {
   if (nadoPollingActive) return;
   nadoPollingActive = true;
   
-  console.log(`NADO: Starting orderbook polling (${NADO_REQUESTS_PER_SECOND} req/sec with ${NADO_PROXIES.length} proxies)`);
-  console.log(`NADO: Effective rate: ${NADO_REQUESTS_PER_SECOND * NADO_PROXIES.length} req/sec`);
+  const numWorkers = NADO_PROXIES.length;
+  const requestsPerWorker = 10;
+  const workerInterval = Math.floor(1000 / requestsPerWorker);
   
-  let marketIndex = 0;
+  console.log(`NADO: Starting ${numWorkers} parallel workers`);
+  console.log(`NADO: Each worker: ${requestsPerWorker} req/sec, interval: ${workerInterval}ms`);
+  console.log(`NADO: Total effective rate: ${numWorkers * requestsPerWorker} req/sec for ${nadoMarkets.length} markets`);
   
-  const pollNext = async () => {
-    if (!nadoPollingActive || nadoMarkets.length === 0) {
-      setTimeout(pollNext, 1000);
-      return;
-    }
+  for (let workerId = 0; workerId < numWorkers; workerId++) {
+    const proxyUrl = NADO_PROXIES[workerId];
+    let localMarketIndex = workerId;
     
-    const tickerId = nadoMarkets[marketIndex];
-    marketIndex = (marketIndex + 1) % nadoMarkets.length;
+    const workerLoop = async () => {
+      if (!nadoPollingActive || nadoMarkets.length === 0) {
+        setTimeout(workerLoop, 1000);
+        return;
+      }
+      
+      const tickerId = nadoMarkets[localMarketIndex % nadoMarkets.length];
+      localMarketIndex = (localMarketIndex + numWorkers) % nadoMarkets.length;
+      
+      nadoStats.requests++;
+      const result = await fetchNadoOrderbookWithProxy(tickerId, proxyUrl);
+      if (result) {
+        nadoStats.success++;
+      } else {
+        nadoStats.errors++;
+      }
+      
+      setTimeout(workerLoop, workerInterval);
+    };
     
-    await fetchNadoOrderbook(tickerId);
-    
-    setTimeout(pollNext, NADO_REQUEST_INTERVAL);
-  };
-  
-  const numWorkers = Math.min(NADO_PROXIES.length, 11);
-  for (let i = 0; i < numWorkers; i++) {
-    setTimeout(() => pollNext(), i * (NADO_REQUEST_INTERVAL / numWorkers));
+    setTimeout(workerLoop, workerId * Math.floor(workerInterval / numWorkers));
   }
+  
+  setInterval(() => {
+    const elapsed = (Date.now() - nadoStats.lastReset) / 1000;
+    const rps = Math.round(nadoStats.requests / elapsed);
+    console.log(`NADO stats: ${nadoStats.requests} req, ${nadoStats.success} ok, ${nadoStats.errors} err, ${rps} req/sec`);
+    nadoStats = { requests: 0, success: 0, errors: 0, lastReset: Date.now() };
+  }, 10000);
   
   setInterval(async () => {
     await fetchNadoTickers();
