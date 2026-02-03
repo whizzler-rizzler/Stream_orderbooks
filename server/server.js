@@ -641,13 +641,18 @@ function connectExtendedOrderbook() {
   
   ws.on('message', (rawData) => {
     try {
+      extMsgCount++;
       const msg = JSON.parse(rawData.toString());
+      
+      
       const data = msg.data || msg;
       const symbol = data.m || msg.market || msg.symbol || data.market;
       const msgType = msg.type || data.t; // SNAPSHOT or DELTA
       
-      
-      if (!symbol) return;
+      if (!symbol) {
+        if (extMsgCount <= 5) console.log('Extended: No symbol found in message');
+        return;
+      }
       
       const normalizedSymbol = normalizeSymbol(symbol);
       const cacheKey = `extended_${normalizedSymbol}`;
