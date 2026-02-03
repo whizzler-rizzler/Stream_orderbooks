@@ -759,10 +759,31 @@ function connectExtendedOrderbook() {
       
       if (!bidState && !askState) return;
       
-      let finalBid = bidState?.price || null;
-      let finalAsk = askState?.price || null;
-      let finalBidSize = bidState?.size || null;
-      let finalAskSize = askState?.size || null;
+      const STALE_TIMEOUT_MS = 5000; // 5 seconds
+      const now = Date.now();
+      
+      // Check if each side is stale (not updated for 5+ seconds)
+      const bidIsStale = bidState && (now - bidState.timestamp > STALE_TIMEOUT_MS);
+      const askIsStale = askState && (now - askState.timestamp > STALE_TIMEOUT_MS);
+      
+      // Use fresh values only
+      let finalBid = (bidState && !bidIsStale) ? bidState.price : null;
+      let finalAsk = (askState && !askIsStale) ? askState.price : null;
+      let finalBidSize = (bidState && !bidIsStale) ? bidState.size : null;
+      let finalAskSize = (askState && !askIsStale) ? askState.size : null;
+      
+      // If one side is stale but other is fresh, use mid-price approach
+      if (finalBid && !finalAsk && askState) {
+        // Ask is stale, estimate from bid + typical spread
+        finalAsk = finalBid * 1.001; // 0.1% spread estimate
+        finalAskSize = null;
+      } else if (finalAsk && !finalBid && bidState) {
+        // Bid is stale, estimate from ask - typical spread
+        finalBid = finalAsk * 0.999;
+        finalBidSize = null;
+      }
+      
+      if (!finalBid && !finalAsk) return;
       
       // VALIDATION: If spread is negative, swap bid and ask (temporary data race)
       if (finalBid && finalAsk && finalAsk < finalBid) {
