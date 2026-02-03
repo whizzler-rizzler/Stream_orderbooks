@@ -195,7 +195,7 @@ function extractVolumeNumber(source, prefer24h = false) {
 }
 
 const responseCache = new Map();
-const CACHE_TTL = 100;
+const CACHE_TTL = 10;
 
 function sendJSON(res, data, req, cacheKey = null) {
   res.setHeader('Content-Type', 'application/json');
