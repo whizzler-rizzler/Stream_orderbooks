@@ -869,11 +869,11 @@ function connectParadex() {
         params: { channel: `trades.${market}` },
         id: index + 2,
       }));
-      // Use snapshot feed type with 25ms refresh rate (fastest available)
+      // Use snapshot feed type with 50ms refresh rate (stable)
       ws.send(JSON.stringify({
         jsonrpc: '2.0',
         method: 'subscribe',
-        params: { channel: `order_book.${market}.snapshot@15@25ms` },
+        params: { channel: `order_book.${market}.snapshot@15@50ms` },
         id: index + 1000,
       }));
     });
@@ -1191,12 +1191,12 @@ async function connectGrvt() {
       id: 1,
       method: 'subscribe',
       params: {
-        stream: 'v1.mini.d', // delta stream for faster updates (sends only changes)
+        stream: 'v1.mini.s', // snapshot stream - stable, full data each update
         selectors: feedMini
       }
     }));
     
-    console.log(`GRVT: Subscribed to ${markets.length} markets (mini ticker delta stream)`);
+    console.log(`GRVT: Subscribed to ${markets.length} markets (mini ticker snapshot @500ms)`);
   });
   
   ws.on('message', (rawData) => {
