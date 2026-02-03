@@ -710,29 +710,24 @@ function connectExtendedOrderbook() {
       
       const spread = finalBid && finalAsk ? (finalAsk - finalBid).toFixed(4) : null;
       
-      const orderbookData = {
+      // Calculate mid price from bid/ask (not from external source)
+      const midPrice = (finalBid && finalAsk) ? ((finalBid + finalAsk) / 2).toString() : null;
+      
+      const fullData = {
+        exchange: 'Extended',
+        symbol: normalizedSymbol,
+        price: midPrice,
         bestBid: finalBid?.toString(),
         bestAsk: finalAsk?.toString(),
         bidSize: finalBidSize?.toString(),
         askSize: finalAskSize?.toString(),
-        spread
+        spread,
+        timestamp: Date.now()
       };
       
-      orderbookCache.set(cacheKey, orderbookData);
-      
-      const existingPrice = priceCache.get(cacheKey);
-      if (existingPrice) {
-        const updatedData = { ...existingPrice, ...orderbookData };
-        priceCache.set(cacheKey, updatedData);
-        broadcast(updatedData);
-      } else {
-        broadcastOrderbook({
-          exchange: 'Extended',
-          symbol: normalizedSymbol,
-          ...orderbookData,
-          timestamp: Date.now()
-        });
-      }
+      orderbookCache.set(cacheKey, fullData);
+      priceCache.set(cacheKey, fullData);
+      broadcast(fullData);
     } catch (error) {
       if (extMsgCount <= 5) console.error('Extended OB parse error:', error.message);
     }
