@@ -315,24 +315,38 @@ const server = http.createServer((req, res) => {
       orderbookSize: orderbookCache.size
     }, req);
   } else if (url === '/api/prices') {
-    const prices = Object.fromEntries(priceCache);
+    // Filter out single-exchange tokens
+    const prices = {};
+    priceCache.forEach((value, key) => {
+      const symbol = value.symbol;
+      if (symbol && isMultiExchangeSymbol(symbol)) {
+        prices[key] = value;
+      }
+    });
     sendJSON(res, {
       timestamp: Date.now(),
-      count: priceCache.size,
+      count: Object.keys(prices).length,
       data: prices
     }, req, 'prices');
   } else if (url === '/api/orderbooks') {
     const allKeys = new Set([...priceCache.keys(), ...orderbookCache.keys()]);
     const combined = {};
     allKeys.forEach(key => {
-      combined[key] = {
-        ...(priceCache.get(key) || {}),
-        ...(orderbookCache.get(key) || {})
-      };
+      const priceData = priceCache.get(key) || {};
+      const orderbookData = orderbookCache.get(key) || {};
+      const symbol = priceData.symbol || orderbookData.symbol;
+      
+      // Filter out single-exchange tokens
+      if (symbol && isMultiExchangeSymbol(symbol)) {
+        combined[key] = {
+          ...priceData,
+          ...orderbookData
+        };
+      }
     });
     sendJSON(res, {
       timestamp: Date.now(),
-      count: allKeys.size,
+      count: Object.keys(combined).length,
       data: combined
     }, req, 'orderbooks');
   } else if (url === '/api/exchanges') {
@@ -365,6 +379,55 @@ const priceCache = new Map();
 const orderbookCache = new Map();
 const previousPrices = new Map();
 
+// Track which exchanges have each symbol (for filtering single-exchange tokens)
+// Key: normalized symbol (e.g., "BTC"), Value: Set of exchange names
+// This map is rebuilt periodically from priceCache to stay accurate
+let symbolExchangeMap = new Map();
+
+function rebuildSymbolExchangeMap() {
+  const newMap = new Map();
+  
+  // Build from priceCache (authoritative source)
+  priceCache.forEach((data) => {
+    const symbol = data.symbol;
+    const exchange = data.exchange;
+    if (symbol && exchange) {
+      if (!newMap.has(symbol)) {
+        newMap.set(symbol, new Set());
+      }
+      newMap.get(symbol).add(exchange);
+    }
+  });
+  
+  // Also include orderbookCache
+  orderbookCache.forEach((data) => {
+    const symbol = data.symbol;
+    const exchange = data.exchange;
+    if (symbol && exchange) {
+      if (!newMap.has(symbol)) {
+        newMap.set(symbol, new Set());
+      }
+      newMap.get(symbol).add(exchange);
+    }
+  });
+  
+  symbolExchangeMap = newMap;
+}
+
+function updateSymbolExchangeMap(symbol, exchangeName) {
+  if (!symbol || !exchangeName) return;
+  if (!symbolExchangeMap.has(symbol)) {
+    symbolExchangeMap.set(symbol, new Set());
+  }
+  symbolExchangeMap.get(symbol).add(exchangeName);
+}
+
+function isMultiExchangeSymbol(symbol) {
+  if (!symbol) return false;
+  const exchanges = symbolExchangeMap.get(symbol);
+  return exchanges && exchanges.size >= 2;
+}
+
 // Memory optimization: limit cache sizes to prevent OOM on Render (512MB limit)
 const MAX_CACHE_SIZE = 500;
 
@@ -396,6 +459,16 @@ setInterval(() => {
 }, 10000);
 
 function broadcast(data) {
+  // Update symbol-exchange tracking
+  if (data.symbol && data.exchange) {
+    updateSymbolExchangeMap(data.symbol, data.exchange);
+  }
+  
+  // Only broadcast symbols that are on 2+ exchanges
+  if (data.symbol && !isMultiExchangeSymbol(data.symbol)) {
+    return; // Skip single-exchange tokens
+  }
+  
   const message = JSON.stringify(data);
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -405,6 +478,16 @@ function broadcast(data) {
 }
 
 function broadcastOrderbook(data) {
+  // Update symbol-exchange tracking
+  if (data.symbol && data.exchange) {
+    updateSymbolExchangeMap(data.symbol, data.exchange);
+  }
+  
+  // Only broadcast symbols that are on 2+ exchanges
+  if (data.symbol && !isMultiExchangeSymbol(data.symbol)) {
+    return; // Skip single-exchange tokens
+  }
+  
   const message = JSON.stringify({ type: 'orderbook', ...data });
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -1881,11 +1964,12 @@ async function start() {
   initLighterProxies();
   initExtendedProxies();
   
-  // Memory cleanup every 60 seconds
+  // Memory cleanup and symbol map rebuild every 60 seconds
   setInterval(() => {
     limitCacheSize(priceCache);
     limitCacheSize(orderbookCache);
     limitCacheSize(previousPrices);
+    rebuildSymbolExchangeMap(); // Rebuild from cache to remove stale entries
   }, 60000);
   
   server.listen(PORT, () => {
