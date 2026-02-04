@@ -116,6 +116,29 @@ function initNadoProxies() {
   console.log(`NADO: Initialized ${NADO_PROXIES.length} proxies for rotation`);
 }
 
+// Lighter proxy rotation (10 proxies)
+let LIGHTER_PROXIES = [];
+let currentLighterProxyIndex = 0;
+
+function initLighterProxies() {
+  LIGHTER_PROXIES = [];
+  for (let i = 1; i <= 10; i++) {
+    const proxyStr = process.env[`Lighter_proxy${i}`];
+    if (proxyStr) {
+      const parsed = parseProxyString(proxyStr);
+      if (parsed) LIGHTER_PROXIES.push(parsed);
+    }
+  }
+  console.log(`Lighter: Initialized ${LIGHTER_PROXIES.length} proxies for rotation`);
+}
+
+function getNextLighterProxy() {
+  if (LIGHTER_PROXIES.length === 0) return null;
+  const proxy = LIGHTER_PROXIES[currentLighterProxyIndex];
+  currentLighterProxyIndex = (currentLighterProxyIndex + 1) % LIGHTER_PROXIES.length;
+  return proxy;
+}
+
 
 function getProxyAgent(exchangeKey, skipProxy = false) {
   const exchange = EXCHANGES[exchangeKey];
@@ -402,7 +425,18 @@ async function fetchPacificaMarkets() {
 }
 
 function connectLighter() {
-  const agent = getProxyAgent('lighter');
+  // Use rotating proxies for Lighter (10 proxies)
+  const proxyUrl = getNextLighterProxy();
+  let agent = null;
+  
+  if (proxyUrl) {
+    console.log(`Lighter: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentLighterProxyIndex}/${LIGHTER_PROXIES.length})`);
+    agent = new HttpsProxyAgent(proxyUrl);
+  } else {
+    // Fallback to single proxy if rotation not available
+    agent = getProxyAgent('lighter');
+  }
+  
   const options = {
     headers: {
       'Origin': 'https://lighter.xyz',
@@ -540,12 +574,20 @@ function connectLighter() {
   
   ws.on('error', (error) => {
     console.error('Lighter: Error', error.message);
+    // On 429 error, try next proxy immediately
+    if (error.message.includes('429')) {
+      console.log('Lighter: Rate limited, trying next proxy immediately...');
+      exchangeSockets.delete('lighter');
+      ws.terminate();
+      setImmediate(connectLighter);
+      return;
+    }
   });
   
   ws.on('close', () => {
-    console.log('Lighter: Disconnected, reconnecting in 5s...');
+    console.log('Lighter: Disconnected, trying next proxy...');
     exchangeSockets.delete('lighter');
-    setTimeout(connectLighter, 5000);
+    setTimeout(connectLighter, 1000); // Faster reconnect with new proxy
   });
   
   exchangeSockets.set('lighter', ws);
@@ -1769,6 +1811,8 @@ async function connectNado() {
 async function start() {
   paradexMarkets = await fetchParadexMarkets();
   pacificaMarkets = await fetchPacificaMarkets();
+  
+  initLighterProxies();
   
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
