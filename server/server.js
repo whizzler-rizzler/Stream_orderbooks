@@ -540,17 +540,33 @@ async function fetchPacificaMarkets() {
   }
 }
 
+// Lighter reconnect state
+let lighterReconnectAttempts = 0;
+const LIGHTER_MAX_BACKOFF = 30000; // Max 30s between reconnects
+
+function getLighterBackoff() {
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+  const backoff = Math.min(1000 * Math.pow(2, lighterReconnectAttempts), LIGHTER_MAX_BACKOFF);
+  return backoff;
+}
+
 function connectLighter() {
   // Use rotating proxies for Lighter (10 proxies)
   const proxyUrl = getNextLighterProxy();
   let agent = null;
   
+  // Log proxy availability status on first connect and every 10 attempts
+  if (lighterReconnectAttempts === 0 || lighterReconnectAttempts % 10 === 0) {
+    console.log(`Lighter: Proxy status - ${LIGHTER_PROXIES.length} proxies available (Lighter_proxy1-10)`);
+  }
+  
   if (proxyUrl) {
-    console.log(`Lighter: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentLighterProxyIndex}/${LIGHTER_PROXIES.length})`);
+    console.log(`Lighter: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentLighterProxyIndex}/${LIGHTER_PROXIES.length}, attempt ${lighterReconnectAttempts})`);
     agent = new HttpsProxyAgent(proxyUrl);
   } else {
     // Fallback to single proxy if rotation not available
     agent = getProxyAgent('lighter');
+    console.log('Lighter: WARNING - No Lighter_proxy1-10 found, using fallback');
   }
   
   const options = {
@@ -564,8 +580,37 @@ function connectLighter() {
   console.log('Lighter: Connecting...');
   const ws = new WebSocket(EXCHANGES.lighter.url, options);
   
+  let lighterLastMessage = Date.now();
+  let lighterLastPong = Date.now();
+  
+  // Ping/pong keepalive for Lighter - check every 10s
+  const lighterPingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+      // Check if no messages AND no pong for 30s = dead connection
+      const timeSinceMessage = Date.now() - lighterLastMessage;
+      const timeSincePong = Date.now() - lighterLastPong;
+      if (timeSinceMessage > 30000 && timeSincePong > 30000) {
+        console.log(`Lighter: No activity for 30s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), reconnecting...`);
+        clearInterval(lighterPingInterval);
+        ws.terminate();
+      }
+    }
+  }, 10000);
+  
+  ws.on('pong', () => {
+    lighterLastPong = Date.now();
+  });
+  
+  ws.on('ping', (data) => {
+    lighterLastMessage = Date.now();
+    ws.pong(data);
+  });
+  
   ws.on('open', () => {
-    console.log('Lighter: Connected');
+    console.log('Lighter: Connected successfully');
+    lighterReconnectAttempts = 0; // Reset backoff on successful connection
+    lighterLastMessage = Date.now();
     
     LIGHTER_MARKETS.forEach((_, index) => {
       ws.send(JSON.stringify({
@@ -583,6 +628,7 @@ function connectLighter() {
   ws.on('message', (rawData) => {
     try {
       msgCounters.lighter++;
+      lighterLastMessage = Date.now(); // Update activity timestamp
       const data = JSON.parse(rawData.toString());
       
       if (data.type === 'update/market_stats' && data.market_stats) {
@@ -689,21 +735,54 @@ function connectLighter() {
   });
   
   ws.on('error', (error) => {
-    console.error('Lighter: Error', error.message);
+    lighterReconnectAttempts++;
+    clearInterval(lighterPingInterval);
+    const errorDetails = {
+      message: error.message,
+      code: error.code,
+      errno: error.errno
+    };
+    console.error(`Lighter: Error (attempt ${lighterReconnectAttempts})`, JSON.stringify(errorDetails));
+    
     // On 429 error, try next proxy immediately
     if (error.message.includes('429')) {
-      console.log('Lighter: Rate limited, trying next proxy immediately...');
+      console.log('Lighter: Rate limited (429), trying next proxy immediately...');
       exchangeSockets.delete('lighter');
       ws.terminate();
       setImmediate(connectLighter);
       return;
     }
+    
+    // On 402 error (Payment Required), proxy may be expired
+    if (error.message.includes('402')) {
+      console.log('Lighter: Payment Required (402) - proxy may be expired or blocked');
+    }
+    
+    // For other errors, use backoff and reconnect
+    const backoff = getLighterBackoff();
+    console.log(`Lighter: Will retry in ${backoff}ms`);
+    exchangeSockets.delete('lighter');
+    ws.terminate();
+    setTimeout(connectLighter, backoff);
   });
   
-  ws.on('close', () => {
-    console.log('Lighter: Disconnected, trying next proxy...');
+  ws.on('close', (code, reason) => {
+    lighterReconnectAttempts++;
+    clearInterval(lighterPingInterval);
+    const closeCodeMeaning = {
+      1000: 'Normal closure',
+      1001: 'Going away',
+      1006: 'Abnormal closure',
+      1011: 'Internal error',
+      1015: 'TLS handshake failed'
+    };
+    const codeMeaning = closeCodeMeaning[code] || 'Unknown';
+    console.log(`Lighter: Disconnected (code=${code} [${codeMeaning}], attempt ${lighterReconnectAttempts})`);
+    
     exchangeSockets.delete('lighter');
-    setTimeout(connectLighter, 1000); // Faster reconnect with new proxy
+    const backoff = getLighterBackoff();
+    console.log(`Lighter: Will reconnect in ${backoff}ms with next proxy...`);
+    setTimeout(connectLighter, backoff);
   });
   
   exchangeSockets.set('lighter', ws);
@@ -792,22 +871,37 @@ function connectExtended() {
   exchangeSockets.set('extended', ws);
 }
 
+// Extended orderbook reconnect state
+let extendedOBReconnectAttempts = 0;
+const EXTENDED_OB_MAX_BACKOFF = 30000; // Max 30s between reconnects
+
+function getExtendedOBBackoff() {
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
+  const backoff = Math.min(1000 * Math.pow(2, extendedOBReconnectAttempts), EXTENDED_OB_MAX_BACKOFF);
+  return backoff;
+}
+
 // Connect to Extended orderbook stream for each market
 function connectExtendedOrderbook() {
   // Use rotating proxies for Extended orderbook
   const proxyUrl = getNextExtendedProxy();
   let agent = null;
   
+  // Log proxy availability status on first connect and every 10 attempts
+  if (extendedOBReconnectAttempts === 0 || extendedOBReconnectAttempts % 10 === 0) {
+    console.log(`Extended OB: Proxy status - ${EXTENDED_PROXIES.length} proxies available (Extended_proxy11-50)`);
+  }
+  
   if (proxyUrl) {
-    console.log(`Extended OB: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentExtendedProxyIndex}/${EXTENDED_PROXIES.length})`);
+    console.log(`Extended OB: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentExtendedProxyIndex}/${EXTENDED_PROXIES.length}, attempt ${extendedOBReconnectAttempts})`);
     agent = new HttpsProxyAgent(proxyUrl);
   } else {
     // Fallback: try same proxy as basic Extended connection
     agent = getProxyAgent('extended');
     if (agent) {
-      console.log('Extended OB: Using fallback proxy from Extended config');
+      console.log('Extended OB: Using fallback proxy from Extended config (no Extended_proxy11-50 found!)');
     } else {
-      console.log('Extended OB: No proxy available - connecting directly (may fail)');
+      console.log('Extended OB: WARNING - No proxy available! Check Extended_proxy11-50 env vars on Render');
     }
   }
   
@@ -826,15 +920,25 @@ function connectExtendedOrderbook() {
   
   const ws = new WebSocket(orderbookUrl, { ...baseOptions });
   let extMsgCount = 0;
+  let extOBLastMessage = Date.now(); // Track last message for keepalive
   
   ws.on('open', () => {
-    console.log('Extended Orderbook: Connected');
+    console.log('Extended Orderbook: Connected successfully');
+    extendedOBReconnectAttempts = 0; // Reset backoff on successful connection
+    extOBLastMessage = Date.now();
+  });
+  
+  // Extended server may send ping - explicitly handle it
+  ws.on('ping', (data) => {
+    extOBLastMessage = Date.now();
+    ws.pong(data); // Explicitly respond to server ping
   });
   
   ws.on('message', (rawData) => {
     try {
       extMsgCount++;
       msgCounters.extended_orderbook++;
+      extOBLastMessage = Date.now(); // Update activity timestamp
       const msg = JSON.parse(rawData.toString());
       
       // DEBUG: Log first 3 messages to verify SNAPSHOT only (no DELTA with depth=1)
@@ -907,38 +1011,84 @@ function connectExtendedOrderbook() {
   });
   
   // Ping/pong keepalive for Extended orderbook
+  // Send our own pings every 10s to keep connection alive
+  // Note: /orderbooks endpoint may not send server pings like main endpoint
   let extOBLastPong = Date.now();
+  // extOBLastMessage is defined above and updated in message handler
   const extOBPingInterval = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.ping();
-      // Check if last pong was too long ago (60s timeout)
-      if (Date.now() - extOBLastPong > 60000) {
-        console.log('Extended OB: No pong received for 60s, reconnecting...');
+      // Check if no messages AND no pong for 30s = dead connection
+      const timeSinceMessage = Date.now() - extOBLastMessage;
+      const timeSincePong = Date.now() - extOBLastPong;
+      if (timeSinceMessage > 30000 && timeSincePong > 30000) {
+        console.log(`Extended OB: No activity for 30s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), reconnecting...`);
         clearInterval(extOBPingInterval);
         ws.terminate();
       }
     }
-  }, 30000);
+  }, 10000); // Every 10s
   
   ws.on('pong', () => {
     extOBLastPong = Date.now();
   });
   
   ws.on('error', (err) => {
-    console.error('Extended Orderbook: Error', err.message);
+    extendedOBReconnectAttempts++;
+    const errorDetails = {
+      message: err.message,
+      code: err.code,
+      errno: err.errno,
+      syscall: err.syscall,
+      address: err.address,
+      port: err.port
+    };
+    console.error(`Extended Orderbook: Error (attempt ${extendedOBReconnectAttempts})`, JSON.stringify(errorDetails));
     clearInterval(extOBPingInterval);
+    
     if (err.message.includes('429')) {
-      console.log('Extended OB: Rate limited, trying next proxy...');
+      console.log('Extended OB: Rate limited (429), trying next proxy immediately...');
       ws.terminate();
       setImmediate(connectExtendedOrderbook);
       return;
     }
+    
+    // For other errors, use backoff and reconnect
+    const backoff = getExtendedOBBackoff();
+    console.log(`Extended OB: Will retry in ${backoff}ms`);
+    ws.terminate();
+    setTimeout(() => connectExtendedOrderbook(), backoff);
   });
   
   ws.on('close', (code, reason) => {
     clearInterval(extOBPingInterval);
-    console.log(`Extended Orderbook: Disconnected (code=${code}, reason=${reason || 'none'}), trying next proxy...`);
-    setTimeout(() => connectExtendedOrderbook(), 1000);
+    extendedOBReconnectAttempts++;
+    
+    // Decode close code
+    const closeCodeMeaning = {
+      1000: 'Normal closure',
+      1001: 'Going away (server shutdown)',
+      1002: 'Protocol error',
+      1003: 'Unsupported data',
+      1005: 'No status received',
+      1006: 'Abnormal closure (connection lost)',
+      1007: 'Invalid payload',
+      1008: 'Policy violation',
+      1009: 'Message too big',
+      1010: 'Missing extension',
+      1011: 'Internal server error',
+      1012: 'Service restart',
+      1013: 'Try again later',
+      1015: 'TLS handshake failed'
+    };
+    const codeMeaning = closeCodeMeaning[code] || 'Unknown';
+    const reasonStr = reason ? reason.toString() : 'none';
+    
+    console.log(`Extended Orderbook: Disconnected (code=${code} [${codeMeaning}], reason=${reasonStr}, attempt ${extendedOBReconnectAttempts})`);
+    
+    const backoff = getExtendedOBBackoff();
+    console.log(`Extended OB: Will reconnect in ${backoff}ms with next proxy...`);
+    setTimeout(() => connectExtendedOrderbook(), backoff);
   });
   
   exchangeSockets.set('extended_orderbook', ws);
