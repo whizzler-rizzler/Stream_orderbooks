@@ -94,6 +94,9 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
 ## Recent Changes (2026-02-04)
+- **Ping/pong keepalive for Lighter**: Dodano taki sam mechanizm keepalive jak dla Extended (10s ping, 30s timeout)
+- **Fixed error handler reconnect**: Extended i Lighter teraz poprawnie wyzwalają reconnect z backoff w error handler (było tylko logowanie)
+- **Exponential backoff**: Lighter ma teraz pełny exponential backoff (1s→2s→4s→8s→16s→30s max)
 - **Extended price = mid price**: Cena Extended teraz obliczana jako (bid + ask) / 2 z orderbook, nie z zewnętrznego źródła
 - **Lighter proxy rotation**: 10 proxy (Lighter_proxy1-10) z automatycznym przełączaniem przy błędzie 429
 - **Extended proxy rotation**: 40 proxy (Extended_proxy11-50) z automatycznym przełączaniem przy błędzie 429
