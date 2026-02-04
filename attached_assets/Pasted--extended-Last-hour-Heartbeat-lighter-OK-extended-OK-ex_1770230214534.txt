@@ -1,0 +1,58 @@
+
+extended
+
+
+Last hour
+
+
+
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:45401, extended:631, extended_orderbook:0, paradex:10951, grvt:1453, reya:79, pacifica:2004, nado:136
+[STATS 10s] lighter:42629, extended:568, extended_orderbook:0, paradex:9703, grvt:1291, reya:75, pacifica:2003, nado:137
+[STATS 10s] lighter:40202, extended:522, extended_orderbook:0, paradex:9814, grvt:1339, reya:66, pacifica:2004, nado:136
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:28782, extended:374, extended_orderbook:0, paradex:6646, grvt:1087, reya:55, pacifica:2004, nado:138
+[STATS 10s] lighter:44002, extended:576, extended_orderbook:0, paradex:10575, grvt:1377, reya:91, pacifica:2014, nado:145
+[STATS 10s] lighter:44795, extended:615, extended_orderbook:0, paradex:11118, grvt:1387, reya:87, pacifica:2003, nado:138
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:42984, extended:600, extended_orderbook:0, paradex:10662, grvt:1312, reya:86, pacifica:1994, nado:133
+[STATS 10s] lighter:37000, extended:607, extended_orderbook:0, paradex:10401, grvt:1392, reya:70, pacifica:2011, nado:130
+[STATS 10s] lighter:42302, extended:577, extended_orderbook:0, paradex:10205, grvt:1319, reya:85, pacifica:2011, nado:137
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:43869, extended:600, extended_orderbook:0, paradex:10478, grvt:1327, reya:78, pacifica:2007, nado:139
+[STATS 10s] lighter:48486, extended:628, extended_orderbook:0, paradex:11908, grvt:1420, reya:74, pacifica:1985, nado:134
+[STATS 10s] lighter:42570, extended:624, extended_orderbook:0, paradex:10263, grvt:1377, reya:83, pacifica:2004, nado:134
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:37708, extended:638, extended_orderbook:0, paradex:8812, grvt:1204, reya:81, pacifica:2031, nado:133
+[STATS 10s] lighter:39187, extended:613, extended_orderbook:0, paradex:8738, grvt:1242, reya:82, pacifica:2003, nado:139
+[STATS 10s] lighter:34761, extended:527, extended_orderbook:0, paradex:8878, grvt:1240, reya:88, pacifica:1999, nado:138
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:36729, extended:587, extended_orderbook:0, paradex:8453, grvt:1250, reya:83, pacifica:2007, nado:136
+[STATS 10s] lighter:42651, extended:596, extended_orderbook:0, paradex:10097, grvt:1311, reya:72, pacifica:1985, nado:140
+[STATS 10s] lighter:44485, extended:619, extended_orderbook:0, paradex:10701, grvt:1386, reya:68, pacifica:2028, nado:139
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:39563, extended:568, extended_orderbook:0, paradex:9034, grvt:1274, reya:71, pacifica:1996, nado:142
+[STATS 10s] lighter:33135, extended:591, extended_orderbook:0, paradex:8772, grvt:1294, reya:72, pacifica:2031, nado:137
+[STATS 10s] lighter:36074, extended:566, extended_orderbook:0, paradex:9154, grvt:1189, reya:68, pacifica:1976, nado:137
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:32016, extended:596, extended_orderbook:0, paradex:7491, grvt:1217, reya:72, pacifica:2028, nado:137
+[STATS 10s] lighter:43526, extended:587, extended_orderbook:0, paradex:10843, grvt:1248, reya:68, pacifica:2004, nado:143
+[STATS 10s] lighter:32782, extended:624, extended_orderbook:0, paradex:8243, grvt:1197, reya:76, pacifica:2003, nado:132
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:43843, extended:634, extended_orderbook:0, paradex:10495, grvt:1346, reya:66, pacifica:2004, nado:242
+[STATS 10s] lighter:35226, extended:614, extended_orderbook:0, paradex:8527, grvt:1218, reya:70, pacifica:2004, nado:159
+[STATS 10s] lighter:37212, extended:624, extended_orderbook:0, paradex:9609, grvt:1231, reya:71, pacifica:2003, nado:137
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:32723, extended:597, extended_orderbook:0, paradex:8180, grvt:1296, reya:70, pacifica:2004, nado:134
+[STATS 10s] lighter:43156, extended:628, extended_orderbook:0, paradex:10691, grvt:1288, reya:83, pacifica:2004, nado:134
+[STATS 10s] lighter:46503, extended:564, extended_orderbook:0, paradex:12109, grvt:1424, reya:92, pacifica:2003, nado:133
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:45548, extended:627, extended_orderbook:0, paradex:10740, grvt:1382, reya:80, pacifica:2004, nado:139
+[STATS 10s] lighter:31950, extended:567, extended_orderbook:0, paradex:9194, grvt:1325, reya:76, pacifica:1993, nado:130
+[STATS 10s] lighter:31670, extended:604, extended_orderbook:0, paradex:8423, grvt:1108, reya:75, pacifica:2014, nado:142
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:33744, extended:593, extended_orderbook:0, paradex:9139, grvt:1239, reya:77, pacifica:2004, nado:131
+[STATS 10s] lighter:38101, extended:621, extended_orderbook:0, paradex:9764, grvt:1247, reya:73, pacifica:2004, nado:137
+[STATS 10s] lighter:35360, extended:577, extended_orderbook:0, paradex:8964, grvt:1184, reya:67, pacifica:2051, nado:133
+Heartbeat: lighter:OK, extended:OK, extended_orderbook:OK, paradex:OK, grvt:OK, reya:OK, pacifica:OK
+[STATS 10s] lighter:34438, extended:599, extended_orderbook:0, paradex:8522, grvt:1268, reya:68, pacifica:2006, nado:137

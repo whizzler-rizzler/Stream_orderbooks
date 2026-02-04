@@ -802,7 +802,13 @@ function connectExtendedOrderbook() {
     console.log(`Extended OB: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentExtendedProxyIndex}/${EXTENDED_PROXIES.length})`);
     agent = new HttpsProxyAgent(proxyUrl);
   } else {
+    // Fallback: try same proxy as basic Extended connection
     agent = getProxyAgent('extended');
+    if (agent) {
+      console.log('Extended OB: Using fallback proxy from Extended config');
+    } else {
+      console.log('Extended OB: No proxy available - connecting directly (may fail)');
+    }
   }
   
   const baseOptions = {
