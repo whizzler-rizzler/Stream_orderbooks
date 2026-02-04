@@ -204,6 +204,11 @@ const CryptoAggregator = () => {
 
   const filteredSymbols = (() => {
     let entries = Array.from(groupedPrices.entries())
+      // Only show symbols that appear on 2+ exchanges (for meaningful comparison)
+      .filter(([, group]) => {
+        const exchangeCount = EXCHANGES.filter(ex => group[ex] !== undefined).length;
+        return exchangeCount >= 2;
+      })
       .filter(([symbol]) =>
         symbol.toLowerCase().includes(searchTerm.toLowerCase())
       );
