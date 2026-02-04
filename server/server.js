@@ -906,8 +906,27 @@ function connectExtendedOrderbook() {
     }
   });
   
+  // Ping/pong keepalive for Extended orderbook
+  let extOBLastPong = Date.now();
+  const extOBPingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+      // Check if last pong was too long ago (60s timeout)
+      if (Date.now() - extOBLastPong > 60000) {
+        console.log('Extended OB: No pong received for 60s, reconnecting...');
+        clearInterval(extOBPingInterval);
+        ws.terminate();
+      }
+    }
+  }, 30000);
+  
+  ws.on('pong', () => {
+    extOBLastPong = Date.now();
+  });
+  
   ws.on('error', (err) => {
     console.error('Extended Orderbook: Error', err.message);
+    clearInterval(extOBPingInterval);
     if (err.message.includes('429')) {
       console.log('Extended OB: Rate limited, trying next proxy...');
       ws.terminate();
@@ -916,8 +935,9 @@ function connectExtendedOrderbook() {
     }
   });
   
-  ws.on('close', () => {
-    console.log('Extended Orderbook: Disconnected, trying next proxy...');
+  ws.on('close', (code, reason) => {
+    clearInterval(extOBPingInterval);
+    console.log(`Extended Orderbook: Disconnected (code=${code}, reason=${reason || 'none'}), trying next proxy...`);
     setTimeout(() => connectExtendedOrderbook(), 1000);
   });
   
