@@ -139,6 +139,29 @@ function getNextLighterProxy() {
   return proxy;
 }
 
+// Extended proxy rotation (40 proxies: 11-50)
+let EXTENDED_PROXIES = [];
+let currentExtendedProxyIndex = 0;
+
+function initExtendedProxies() {
+  EXTENDED_PROXIES = [];
+  for (let i = 11; i <= 50; i++) {
+    const proxyStr = process.env[`Extended_proxy${i}`];
+    if (proxyStr) {
+      const parsed = parseProxyString(proxyStr);
+      if (parsed) EXTENDED_PROXIES.push(parsed);
+    }
+  }
+  console.log(`Extended: Initialized ${EXTENDED_PROXIES.length} proxies for rotation`);
+}
+
+function getNextExtendedProxy() {
+  if (EXTENDED_PROXIES.length === 0) return null;
+  const proxy = EXTENDED_PROXIES[currentExtendedProxyIndex];
+  currentExtendedProxyIndex = (currentExtendedProxyIndex + 1) % EXTENDED_PROXIES.length;
+  return proxy;
+}
+
 
 function getProxyAgent(exchangeKey, skipProxy = false) {
   const exchange = EXCHANGES[exchangeKey];
@@ -341,6 +364,16 @@ const exchangeSockets = new Map();
 const priceCache = new Map();
 const orderbookCache = new Map();
 const previousPrices = new Map();
+
+// Memory optimization: limit cache sizes to prevent OOM on Render (512MB limit)
+const MAX_CACHE_SIZE = 500;
+
+function limitCacheSize(cache, maxSize = MAX_CACHE_SIZE) {
+  if (cache.size > maxSize) {
+    const keysToDelete = Array.from(cache.keys()).slice(0, cache.size - maxSize);
+    keysToDelete.forEach(key => cache.delete(key));
+  }
+}
 let paradexMarkets = [];
 
 const msgCounters = {
@@ -594,7 +627,17 @@ function connectLighter() {
 }
 
 function connectExtended() {
-  const agent = getProxyAgent('extended');
+  // Use rotating proxies for Extended (40 proxies)
+  const proxyUrl = getNextExtendedProxy();
+  let agent = null;
+  
+  if (proxyUrl) {
+    console.log(`Extended: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentExtendedProxyIndex}/${EXTENDED_PROXIES.length})`);
+    agent = new HttpsProxyAgent(proxyUrl);
+  } else {
+    agent = getProxyAgent('extended');
+  }
+  
   const options = {
     headers: {
       'Origin': 'https://app.extended.exchange',
@@ -648,12 +691,19 @@ function connectExtended() {
   
   ws.on('error', (error) => {
     console.error('Extended: Error', error.message);
+    if (error.message.includes('429')) {
+      console.log('Extended: Rate limited, trying next proxy...');
+      exchangeSockets.delete('extended');
+      ws.terminate();
+      setImmediate(connectExtended);
+      return;
+    }
   });
   
   ws.on('close', () => {
-    console.log('Extended: Disconnected, reconnecting in 5s...');
+    console.log('Extended: Disconnected, trying next proxy...');
     exchangeSockets.delete('extended');
-    setTimeout(connectExtended, 5000);
+    setTimeout(connectExtended, 1000);
   });
   
   exchangeSockets.set('extended', ws);
@@ -661,7 +711,17 @@ function connectExtended() {
 
 // Connect to Extended orderbook stream for each market
 function connectExtendedOrderbook() {
-  const agent = getProxyAgent('extended');
+  // Use rotating proxies for Extended orderbook
+  const proxyUrl = getNextExtendedProxy();
+  let agent = null;
+  
+  if (proxyUrl) {
+    console.log(`Extended OB: Using proxy ${proxyUrl.replace(/:[^:@]+@/, ':****@')} (index ${currentExtendedProxyIndex}/${EXTENDED_PROXIES.length})`);
+    agent = new HttpsProxyAgent(proxyUrl);
+  } else {
+    agent = getProxyAgent('extended');
+  }
+  
   const baseOptions = {
     headers: {
       'Origin': 'https://app.extended.exchange',
@@ -759,11 +819,17 @@ function connectExtendedOrderbook() {
   
   ws.on('error', (err) => {
     console.error('Extended Orderbook: Error', err.message);
+    if (err.message.includes('429')) {
+      console.log('Extended OB: Rate limited, trying next proxy...');
+      ws.terminate();
+      setImmediate(connectExtendedOrderbook);
+      return;
+    }
   });
   
   ws.on('close', () => {
-    console.log('Extended Orderbook: Disconnected, reconnecting in 5s...');
-    setTimeout(() => connectExtendedOrderbook(), 5000);
+    console.log('Extended Orderbook: Disconnected, trying next proxy...');
+    setTimeout(() => connectExtendedOrderbook(), 1000);
   });
   
   exchangeSockets.set('extended_orderbook', ws);
@@ -1813,6 +1879,14 @@ async function start() {
   pacificaMarkets = await fetchPacificaMarkets();
   
   initLighterProxies();
+  initExtendedProxies();
+  
+  // Memory cleanup every 60 seconds
+  setInterval(() => {
+    limitCacheSize(priceCache);
+    limitCacheSize(orderbookCache);
+    limitCacheSize(previousPrices);
+  }, 60000);
   
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

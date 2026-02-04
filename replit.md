@@ -49,12 +49,12 @@ Aplikacja do agregacji danych w czasie rzeczywistym z 7 zdecentralizowanych gie�
 ```
 
 ## Environment Variables
-- `Proxy_lighter_public` - Dedicated proxy for Lighter
+- `Lighter_proxy1` to `Lighter_proxy10` - 10 rotating proxies for Lighter WebSocket
+- `Extended_proxy11` to `Extended_proxy50` - 40 rotating proxies for Extended WebSocket
+- `Nado_proxy1` to `Nado_proxy11` - 11 rotating proxies for NADO REST API
 - `Proxy_GRVT_public` - Dedicated proxy for GRVT
 - `Proxy_pacifica_public` - Dedicated proxy for Pacifica
-- `Proxy_extended_public` - Dedicated proxy for Extended
 - `Proxy_reya_public` - Dedicated proxy for Reya
-- `Nado_proxy1` to `Nado_proxy11` - 11 rotating proxies for NADO REST API
 - `PROXY_URL` - Fallback proxy URL
 
 ## Proxy Format
@@ -92,6 +92,13 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 
 ## Render Deployment
 See `server/RENDER_DEPLOY.md` for deployment guide.
+
+## Recent Changes (2026-02-04)
+- **Extended price = mid price**: Cena Extended teraz obliczana jako (bid + ask) / 2 z orderbook, nie z zewnętrznego źródła
+- **Lighter proxy rotation**: 10 proxy (Lighter_proxy1-10) z automatycznym przełączaniem przy błędzie 429
+- **Extended proxy rotation**: 40 proxy (Extended_proxy11-50) z automatycznym przełączaniem przy błędzie 429
+- **Memory optimization**: Cache limit 500 wpisów, czyszczenie co 60 sekund (zapobiega OOM na Render 512MB)
+- Szybszy reconnect przy błędach (1s zamiast 5s)
 
 ## Recent Changes (2026-02-03)
 - Added [STATS 10s] diagnostic logs showing message frequency from each exchange
