@@ -600,6 +600,13 @@ function getLighterBackoff() {
 }
 
 function connectLighter() {
+  // Prevent multiple simultaneous connections
+  const existingWs = exchangeSockets.get('lighter');
+  if (existingWs && (existingWs.readyState === WebSocket.CONNECTING || existingWs.readyState === WebSocket.OPEN)) {
+    console.log('Lighter: Connection already active, skipping duplicate connect');
+    return;
+  }
+  
   // Use rotating proxies for Lighter (10 proxies)
   const proxyUrl = getNextLighterProxy();
   let agent = null;
@@ -838,6 +845,13 @@ function connectLighter() {
 }
 
 function connectExtended() {
+  // Prevent multiple simultaneous connections
+  const existingWs = exchangeSockets.get('extended');
+  if (existingWs && (existingWs.readyState === WebSocket.CONNECTING || existingWs.readyState === WebSocket.OPEN)) {
+    console.log('Extended: Connection already active, skipping duplicate connect');
+    return;
+  }
+  
   // Use rotating proxies for Extended (40 proxies)
   const proxyUrl = getNextExtendedProxy();
   let agent = null;
@@ -932,6 +946,13 @@ function getExtendedOBBackoff() {
 
 // Connect to Extended orderbook stream for each market
 function connectExtendedOrderbook() {
+  // Prevent multiple simultaneous connections
+  const existingWs = exchangeSockets.get('extended_orderbook');
+  if (existingWs && (existingWs.readyState === WebSocket.CONNECTING || existingWs.readyState === WebSocket.OPEN)) {
+    console.log('Extended OB: Connection already active, skipping duplicate connect');
+    return;
+  }
+  
   // Use rotating proxies for Extended orderbook
   const proxyUrl = getNextExtendedProxy();
   let agent = null;
