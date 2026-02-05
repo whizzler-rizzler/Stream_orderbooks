@@ -429,13 +429,26 @@ function isMultiExchangeSymbol(symbol) {
 }
 
 // Memory optimization: limit cache sizes to prevent OOM on Render (512MB limit)
-const MAX_CACHE_SIZE = 500;
+// Reduced from 500 to 200 - at 20k+ msg/10s, cache grows too fast
+const MAX_CACHE_SIZE = 200;
+const MAX_RESPONSE_CACHE_SIZE = 50; // responseCache for REST API responses
 
 function limitCacheSize(cache, maxSize = MAX_CACHE_SIZE) {
   if (cache.size > maxSize) {
     const keysToDelete = Array.from(cache.keys()).slice(0, cache.size - maxSize);
     keysToDelete.forEach(key => cache.delete(key));
   }
+}
+
+// Inline check before set - prevents cache explosion between cleanup intervals
+function safeCacheSet(cache, key, value, maxSize = MAX_CACHE_SIZE) {
+  if (cache.size >= maxSize) {
+    // Delete oldest 20% when at limit
+    const toDelete = Math.floor(maxSize * 0.2);
+    const keys = Array.from(cache.keys()).slice(0, toDelete);
+    keys.forEach(k => cache.delete(k));
+  }
+  cache.set(key, value);
 }
 let paradexMarkets = [];
 
@@ -649,7 +662,7 @@ function connectLighter() {
           const change = ((price - prevPrice) / prevPrice) * 100;
           priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
         }
-        previousPrices.set(cacheKey, price);
+        safeCacheSet(previousPrices, cacheKey, price);
         
         const volumeTokens = extractVolumeNumber(stats, true);
         const volumeUsd = volumeTokens !== undefined ? volumeTokens * price : undefined;
@@ -670,7 +683,7 @@ function connectLighter() {
           spread: existingOrderbook.spread
         };
         
-        priceCache.set(cacheKey, priceData);
+        safeCacheSet(priceCache, cacheKey, priceData);
         broadcast(priceData);
       }
       
@@ -713,12 +726,12 @@ function connectLighter() {
           spread
         };
         
-        orderbookCache.set(cacheKey, orderbookData);
+        safeCacheSet(orderbookCache, cacheKey, orderbookData);
         
         const existingPrice = priceCache.get(cacheKey);
         if (existingPrice) {
           const updatedData = { ...existingPrice, ...orderbookData };
-          priceCache.set(cacheKey, updatedData);
+          safeCacheSet(priceCache, cacheKey, updatedData);
           broadcast(updatedData);
         } else {
           broadcastOrderbook({
@@ -842,7 +855,7 @@ function connectExtended() {
           const existing = priceCache.get(cacheKey);
           if (existing && volumeUsd !== undefined) {
             existing.volume = volumeUsd.toString();
-            priceCache.set(cacheKey, existing);
+            safeCacheSet(priceCache, cacheKey, existing);
           }
         }
       }
@@ -1002,8 +1015,8 @@ function connectExtendedOrderbook() {
         timestamp: Date.now()
       };
       
-      orderbookCache.set(cacheKey, fullData);
-      priceCache.set(cacheKey, fullData);
+      safeCacheSet(orderbookCache, cacheKey, fullData);
+      safeCacheSet(priceCache, cacheKey, fullData);
       broadcast(fullData);
     } catch (error) {
       if (extMsgCount <= 5) console.error('Extended OB parse error:', error.message);
@@ -1141,12 +1154,12 @@ function connectExtendedOrderbookMarket(market, baseOptions) {
             spread
           };
           
-          orderbookCache.set(cacheKey, orderbookData);
+          safeCacheSet(orderbookCache, cacheKey, orderbookData);
           
           const existingPrice = priceCache.get(cacheKey);
           if (existingPrice) {
             const updatedData = { ...existingPrice, ...orderbookData };
-            priceCache.set(cacheKey, updatedData);
+            safeCacheSet(priceCache, cacheKey, updatedData);
             broadcast(updatedData);
           } else {
             broadcastOrderbook({
@@ -1240,7 +1253,7 @@ function connectParadex() {
               const change = ((price - prevPrice) / prevPrice) * 100;
               priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
             }
-            previousPrices.set(cacheKey, price);
+            safeCacheSet(previousPrices, cacheKey, price);
             
             const volume = item.total_volume ? parseFloat(item.total_volume) * price : undefined;
             
@@ -1260,7 +1273,7 @@ function connectParadex() {
               spread: existingOrderbook.spread
             };
             
-            priceCache.set(cacheKey, priceData);
+            safeCacheSet(priceCache, cacheKey, priceData);
             broadcast(priceData);
           });
         }
@@ -1327,12 +1340,12 @@ function connectParadex() {
             spread
           };
           
-          orderbookCache.set(cacheKey, orderbookData);
+          safeCacheSet(orderbookCache, cacheKey, orderbookData);
           
           const existingPrice = priceCache.get(cacheKey);
           if (existingPrice) {
             const updatedData = { ...existingPrice, ...orderbookData };
-            priceCache.set(cacheKey, updatedData);
+            safeCacheSet(priceCache, cacheKey, updatedData);
             broadcast(updatedData);
           } else {
             // Calculate mid price from orderbook
@@ -1345,7 +1358,7 @@ function connectParadex() {
                 timestamp: Date.now(),
                 ...orderbookData
               };
-              priceCache.set(cacheKey, priceData);
+              safeCacheSet(priceCache, cacheKey, priceData);
               broadcast(priceData);
             }
           }
@@ -1369,7 +1382,7 @@ function connectParadex() {
               ...existingOrderbook
             };
             
-            priceCache.set(cacheKey, priceData);
+            safeCacheSet(priceCache, cacheKey, priceData);
             broadcast(priceData);
           }
         }
@@ -1582,7 +1595,7 @@ async function connectGrvt() {
           const change = ((price - prevPrice) / prevPrice) * 100;
           priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
         }
-        previousPrices.set(cacheKey, price);
+        safeCacheSet(previousPrices, cacheKey, price);
         
         // Extract bid/ask from mini ticker (already included!)
         const bestBid = parseFloat(feed.best_bid_price || 0);
@@ -1604,7 +1617,7 @@ async function connectGrvt() {
           spread
         };
         
-        priceCache.set(cacheKey, priceData);
+        safeCacheSet(priceCache, cacheKey, priceData);
         broadcast(priceData);
       }
       
@@ -1654,12 +1667,12 @@ async function connectGrvt() {
           spread
         };
         
-        orderbookCache.set(cacheKey, orderbookData);
+        safeCacheSet(orderbookCache, cacheKey, orderbookData);
         
         const existingPrice = priceCache.get(cacheKey);
         if (existingPrice) {
           const updatedData = { ...existingPrice, ...orderbookData };
-          priceCache.set(cacheKey, updatedData);
+          safeCacheSet(priceCache, cacheKey, updatedData);
           broadcast(updatedData);
         }
       }
@@ -1741,7 +1754,7 @@ function connectReya() {
             const change = ((oraclePrice - prevPrice) / prevPrice) * 100;
             priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
           }
-          previousPrices.set(cacheKey, oraclePrice);
+          safeCacheSet(previousPrices, cacheKey, oraclePrice);
           
           const existingOrderbook = orderbookCache.get(cacheKey) || {};
           
@@ -1756,7 +1769,7 @@ function connectReya() {
             spread: existingOrderbook.spread
           };
           
-          priceCache.set(cacheKey, priceData);
+          safeCacheSet(priceCache, cacheKey, priceData);
           broadcast(priceData);
         });
       }
@@ -1775,7 +1788,7 @@ function connectReya() {
           const existingPrice = priceCache.get(cacheKey);
           if (existingPrice && volume) {
             existingPrice.volume = volume.toString();
-            priceCache.set(cacheKey, existingPrice);
+            safeCacheSet(priceCache, cacheKey, existingPrice);
             broadcast(existingPrice);
           }
         });
@@ -1873,7 +1886,7 @@ function connectPacifica() {
             const change = ((price - prevPrice) / prevPrice) * 100;
             priceChange = change >= 0 ? `+${change.toFixed(2)}` : change.toFixed(2);
           }
-          previousPrices.set(cacheKey, price);
+          safeCacheSet(previousPrices, cacheKey, price);
           
           const existingOrderbook = orderbookCache.get(cacheKey) || {};
           const volume = parseFloat(item.volume_24h || 0);
@@ -1892,7 +1905,7 @@ function connectPacifica() {
             spread: existingOrderbook.spread
           };
           
-          priceCache.set(cacheKey, priceData);
+          safeCacheSet(priceCache, cacheKey, priceData);
           broadcast(priceData);
         });
       }
@@ -1924,12 +1937,12 @@ function connectPacifica() {
           spread
         };
         
-        orderbookCache.set(cacheKey, orderbookData);
+        safeCacheSet(orderbookCache, cacheKey, orderbookData);
         
         const existingPrice = priceCache.get(cacheKey);
         if (existingPrice) {
           const updatedData = { ...existingPrice, ...orderbookData };
-          priceCache.set(cacheKey, updatedData);
+          safeCacheSet(priceCache, cacheKey, updatedData);
           broadcast(updatedData);
         } else {
           const midPrice = bestBid && bestAsk ? ((bestBid + bestAsk) / 2) : bestBid || bestAsk;
@@ -1941,7 +1954,7 @@ function connectPacifica() {
               timestamp: Date.now(),
               ...orderbookData
             };
-            priceCache.set(cacheKey, priceData);
+            safeCacheSet(priceCache, cacheKey, priceData);
             broadcast(priceData);
           }
         }
@@ -2047,7 +2060,7 @@ async function fetchNadoOrderbookDedicated(market, proxyUrl) {
       spread
     };
     
-    orderbookCache.set(cacheKey, orderbookData);
+    safeCacheSet(orderbookCache, cacheKey, orderbookData);
     
     const existingPrice = priceCache.get(cacheKey);
     const broadcastData = existingPrice 
@@ -2060,7 +2073,7 @@ async function fetchNadoOrderbookDedicated(market, proxyUrl) {
           timestamp: Date.now()
         };
     
-    priceCache.set(cacheKey, broadcastData);
+    safeCacheSet(priceCache, cacheKey, broadcastData);
     broadcast(broadcastData);
     
     return data;
@@ -2140,13 +2153,22 @@ async function start() {
   initLighterProxies();
   initExtendedProxies();
   
-  // Memory cleanup and symbol map rebuild every 60 seconds
+  // Memory cleanup every 15 seconds (was 60s - too slow for 20k+ msg/10s)
   setInterval(() => {
     limitCacheSize(priceCache);
     limitCacheSize(orderbookCache);
     limitCacheSize(previousPrices);
+    limitCacheSize(responseCache, MAX_RESPONSE_CACHE_SIZE); // Clean REST API cache too!
     rebuildSymbolExchangeMap(); // Rebuild from cache to remove stale entries
-  }, 60000);
+  }, 15000);
+  
+  // Memory usage logging every 30s
+  setInterval(() => {
+    const mem = process.memoryUsage();
+    const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
+    const rssMB = Math.round(mem.rss / 1024 / 1024);
+    console.log(`[MEMORY] Heap: ${heapMB}MB, RSS: ${rssMB}MB, Caches: price=${priceCache.size}, orderbook=${orderbookCache.size}, response=${responseCache.size}`);
+  }, 30000);
   
   server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
