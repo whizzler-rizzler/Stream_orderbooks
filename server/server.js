@@ -442,6 +442,7 @@ function limitCacheSize(cache, maxSize = MAX_CACHE_SIZE) {
 }
 
 // Inline check before set - prevents cache explosion between cleanup intervals
+// Also preserves last known bid/ask when new value is null (fallback for incomplete data)
 function safeCacheSet(cache, key, value, maxSize = MAX_CACHE_SIZE) {
   if (cache.size >= maxSize) {
     // Delete oldest 20% when at limit
@@ -449,6 +450,24 @@ function safeCacheSet(cache, key, value, maxSize = MAX_CACHE_SIZE) {
     const keys = Array.from(cache.keys()).slice(0, toDelete);
     keys.forEach(k => cache.delete(k));
   }
+  
+  // Fallback: preserve last known bid/ask/spread when new value is null
+  const existing = cache.get(key);
+  if (existing && value) {
+    if (!value.bestBid && existing.bestBid) value.bestBid = existing.bestBid;
+    if (!value.bestAsk && existing.bestAsk) value.bestAsk = existing.bestAsk;
+    if (!value.bidSize && existing.bidSize) value.bidSize = existing.bidSize;
+    if (!value.askSize && existing.askSize) value.askSize = existing.askSize;
+    // Recalculate spread if we have both bid and ask now
+    if (value.bestBid && value.bestAsk && !value.spread) {
+      const bid = parseFloat(value.bestBid);
+      const ask = parseFloat(value.bestAsk);
+      if (bid > 0 && ask > 0 && ask > bid) {
+        value.spread = (ask - bid).toFixed(4);
+      }
+    }
+  }
+  
   cache.set(key, value);
 }
 let paradexMarkets = [];
