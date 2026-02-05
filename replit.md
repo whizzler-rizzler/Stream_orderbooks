@@ -93,6 +93,14 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 ## Render Deployment
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
+## Recent Changes (2026-02-05)
+- **Memory optimization for Render OOM**: Rozwiązano problem "Ran out of memory (512MB)" na Render
+  - MAX_CACHE_SIZE zmniejszone z 500 na 200
+  - Cleanup co 15s zamiast 60s (przy 20k+ msg/10s cache rósł za szybko)
+  - Dodano czyszczenie responseCache (wcześniej nie było czyszczone!)
+  - safeCacheSet() - inline limit check przed każdym cache.set()
+  - [MEMORY] logging co 30s: Heap ~25MB, RSS ~135MB (bezpiecznie poniżej 512MB)
+
 ## Recent Changes (2026-02-04)
 - **Ping/pong keepalive for Lighter**: Dodano taki sam mechanizm keepalive jak dla Extended (10s ping, 30s timeout)
 - **Fixed error handler reconnect**: Extended i Lighter teraz poprawnie wyzwalają reconnect z backoff w error handler (było tylko logowanie)
