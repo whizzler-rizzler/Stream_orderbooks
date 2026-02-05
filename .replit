@@ -61,3 +61,6 @@ externalPort = 3000
 
 [userenv.shared]
 PROXY_URL = "http://ilbefxoi:mhaamz128dg0@167.100.107.11:6580"
+
+[deployment]
+deploymentTarget = "cloudrun"
