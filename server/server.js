@@ -428,6 +428,22 @@ function isMultiExchangeSymbol(symbol) {
   return exchanges && exchanges.size >= 2;
 }
 
+// Format number with dynamic precision based on value magnitude
+// Ensures small values like 0.000001 aren't truncated to 0.0000
+function formatPrice(value) {
+  if (value === null || value === undefined || isNaN(value)) return null;
+  const num = parseFloat(value);
+  if (num === 0) return '0';
+  const absVal = Math.abs(num);
+  // More decimal places for smaller values
+  if (absVal < 0.0001) return num.toPrecision(6);
+  if (absVal < 0.01) return num.toFixed(6);
+  if (absVal < 1) return num.toFixed(4);
+  if (absVal < 100) return num.toFixed(4);
+  if (absVal < 10000) return num.toFixed(2);
+  return num.toFixed(0);
+}
+
 // Memory optimization: limit cache sizes to prevent OOM on Render (512MB limit)
 // 500 entries needed for ~454 symbols across 7 exchanges
 // Cleanup every 15s prevents accumulation between cleanups
@@ -463,7 +479,7 @@ function safeCacheSet(cache, key, value, maxSize = MAX_CACHE_SIZE) {
       const bid = parseFloat(value.bestBid);
       const ask = parseFloat(value.bestAsk);
       if (bid > 0 && ask > 0 && ask > bid) {
-        value.spread = (ask - bid).toFixed(4);
+        value.spread = formatPrice(ask - bid);
       }
     }
   }
@@ -728,7 +744,7 @@ function connectLighter() {
         const bestAsk = sortedAsks.length > 0 ? parseFloat(sortedAsks[0].price) : null;
         const bidSize = sortedBids.length > 0 ? sortedBids[0].size : null;
         const askSize = sortedAsks.length > 0 ? sortedAsks[0].size : null;
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+        const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
         
         // Only update if values actually changed to prevent flickering
         const existingOB = orderbookCache.get(cacheKey);
@@ -1018,7 +1034,7 @@ function connectExtendedOrderbook() {
       
       if (!finalBid && !finalAsk) return;
       
-      const spread = finalBid && finalAsk ? (finalAsk - finalBid).toFixed(4) : null;
+      const spread = finalBid && finalAsk ? formatPrice(finalAsk - finalBid) : null;
       
       // Calculate mid price from bid/ask (not from external source)
       const midPrice = (finalBid && finalAsk) ? ((finalBid + finalAsk) / 2).toString() : null;
@@ -1164,7 +1180,7 @@ function connectExtendedOrderbookMarket(market, baseOptions) {
           
           const bestBid = getPrice(bids);
           const bestAsk = getPrice(asks);
-          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+          const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
           
           const orderbookData = {
             bestBid: bestBid?.toString(),
@@ -1350,7 +1366,7 @@ function connectParadex() {
           
           if (!bestBid && !bestAsk) return;
           
-          const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+          const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
           
           const orderbookData = {
             bestBid: bestBid?.toString(),
@@ -1622,7 +1638,7 @@ async function connectGrvt() {
         const bestAsk = parseFloat(feed.best_ask_price || 0);
         const bidSize = feed.best_bid_size;
         const askSize = feed.best_ask_size;
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+        const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
         
         const priceData = {
           exchange: 'GRVT',
@@ -1677,7 +1693,7 @@ async function connectGrvt() {
         const bestAsk = getBestPrice(asks);
         const bidSize = getBestSize(bids);
         const askSize = getBestSize(asks);
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
         
         const orderbookData = {
           bestBid: bestBid?.toString(),
@@ -1947,7 +1963,7 @@ function connectPacifica() {
         const bestAsk = asks.length > 0 ? parseFloat(asks[0].p) : null;
         const bidSize = bids.length > 0 ? bids[0].a : null;
         const askSize = asks.length > 0 ? asks[0].a : null;
-        const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(2) : null;
+        const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
         
         const orderbookData = {
           bestBid: bestBid?.toString(),
@@ -2070,7 +2086,7 @@ async function fetchNadoOrderbookDedicated(market, proxyUrl) {
     const bestAsk = asks.length > 0 ? asks[0][0] : null;
     const bidSize = bids.length > 0 ? bids[0][1] : null;
     const askSize = asks.length > 0 ? asks[0][1] : null;
-    const spread = bestBid && bestAsk ? (bestAsk - bestBid).toFixed(4) : null;
+    const spread = bestBid && bestAsk ? formatPrice(bestAsk - bestBid) : null;
     
     const orderbookData = {
       bestBid: bestBid?.toString(),
