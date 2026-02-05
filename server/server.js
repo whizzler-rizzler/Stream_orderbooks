@@ -431,7 +431,7 @@ function isMultiExchangeSymbol(symbol) {
 // Memory optimization: limit cache sizes to prevent OOM on Render (512MB limit)
 // 500 entries needed for ~454 symbols across 7 exchanges
 // Cleanup every 15s prevents accumulation between cleanups
-const MAX_CACHE_SIZE = 500;
+const MAX_CACHE_SIZE = 700;
 const MAX_RESPONSE_CACHE_SIZE = 50; // responseCache for REST API responses
 
 function limitCacheSize(cache, maxSize = MAX_CACHE_SIZE) {
