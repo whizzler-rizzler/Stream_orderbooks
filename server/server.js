@@ -873,14 +873,45 @@ function connectExtended() {
   
   console.log('Extended: Connecting...');
   const ws = new WebSocket(EXCHANGES.extended.url, options);
+  let extLastMessage = Date.now();
+  let extLastPong = Date.now();
   
   ws.on('open', () => {
     console.log('Extended: Connected');
+    extendedReconnectAttempts = 0;
+    extLastMessage = Date.now();
+    extLastPong = Date.now();
   });
+  
+  ws.on('ping', (data) => {
+    extLastMessage = Date.now();
+    ws.pong(data);
+  });
+  
+  ws.on('pong', () => {
+    extLastPong = Date.now();
+  });
+  
+  const extPingInterval = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.ping(); } catch(e) {}
+      const timeSinceMessage = Date.now() - extLastMessage;
+      const timeSincePong = Date.now() - extLastPong;
+      if (timeSinceMessage > 15000 && timeSincePong > 15000) {
+        console.log(`Extended: DEAD - no activity for 15s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
+        clearInterval(extPingInterval);
+        exchangeSockets.delete('extended');
+        ws.terminate();
+        safeReconnectExtended(500, 'ping-timeout');
+      }
+    }
+  }, 10000);
+  ws._pingInterval = extPingInterval;
   
   ws.on('message', (rawData) => {
     try {
       msgCounters.extended++;
+      extLastMessage = Date.now();
       const lines = rawData.toString().split('\n');
       
       for (const line of lines) {
@@ -897,11 +928,9 @@ function connectExtended() {
           const normalizedSymbol = normalizeSymbol(market);
           const cacheKey = `extended_${normalizedSymbol}`;
           
-          // Only update volume and priceChange - price comes from orderbook mid price
           const volumeTokens = extractVolumeNumber(data.data, true);
           const volumeUsd = volumeTokens !== undefined ? volumeTokens * price : undefined;
           
-          // Update existing orderbook data with volume only (don't overwrite price)
           const existing = priceCache.get(cacheKey);
           if (existing && volumeUsd !== undefined) {
             existing.volume = volumeUsd.toString();
@@ -915,34 +944,57 @@ function connectExtended() {
   });
   
   ws.on('error', (error) => {
-    console.error('Extended: Error', error.message);
+    if (exchangeSockets.get('extended') !== ws) return;
+    extendedReconnectAttempts++;
+    clearInterval(extPingInterval);
+    console.error(`Extended: Error (attempt ${extendedReconnectAttempts})`, error.message);
+    exchangeSockets.delete('extended');
+    ws.terminate();
     if (error.message.includes('429')) {
-      console.log('Extended: Rate limited, trying next proxy...');
-      exchangeSockets.delete('extended');
-      ws.terminate();
-      setImmediate(connectExtended);
-      return;
+      safeReconnectExtended(100, '429-rate-limit');
+    } else {
+      safeReconnectExtended(500, 'error');
     }
   });
   
-  ws.on('close', () => {
-    console.log('Extended: Disconnected, trying next proxy...');
+  ws.on('close', (code) => {
+    if (exchangeSockets.get('extended') !== ws) return;
+    clearInterval(extPingInterval);
+    extendedReconnectAttempts++;
+    console.log(`Extended: Disconnected (code=${code}, attempt ${extendedReconnectAttempts})`);
     exchangeSockets.delete('extended');
-    setTimeout(connectExtended, 1000);
+    safeReconnectExtended(500, 'close');
   });
   
   exchangeSockets.set('extended', ws);
 }
 
+// Extended reconnect state with pending flags to prevent duplicate scheduling
+let extendedReconnectAttempts = 0;
+let extendedReconnectTimer = null;
+let extendedOBReconnectTimer = null;
+
+function safeReconnectExtended(delay = 500, source = '') {
+  if (extendedReconnectTimer) return;
+  console.log(`Extended: Scheduling reconnect in ${delay}ms [${source}]`);
+  extendedReconnectTimer = setTimeout(() => {
+    extendedReconnectTimer = null;
+    connectExtended();
+  }, delay);
+}
+
+function safeReconnectExtendedOB(delay = 500, source = '') {
+  if (extendedOBReconnectTimer) return;
+  console.log(`Extended OB: Scheduling reconnect in ${delay}ms [${source}]`);
+  extendedOBReconnectTimer = setTimeout(() => {
+    extendedOBReconnectTimer = null;
+    connectExtendedOrderbook();
+  }, delay);
+}
+
 // Extended orderbook reconnect state
 let extendedOBReconnectAttempts = 0;
-const EXTENDED_OB_MAX_BACKOFF = 30000; // Max 30s between reconnects
 
-function getExtendedOBBackoff() {
-  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s max
-  const backoff = Math.min(1000 * Math.pow(2, extendedOBReconnectAttempts), EXTENDED_OB_MAX_BACKOFF);
-  return backoff;
-}
 
 // Connect to Extended orderbook stream for each market
 function connectExtendedOrderbook() {
@@ -1088,77 +1140,46 @@ function connectExtendedOrderbook() {
   const extOBPingInterval = setInterval(() => {
     if (ws.readyState === WebSocket.OPEN) {
       ws.ping();
-      // Check if no messages AND no pong for 30s = dead connection
       const timeSinceMessage = Date.now() - extOBLastMessage;
       const timeSincePong = Date.now() - extOBLastPong;
-      if (timeSinceMessage > 30000 && timeSincePong > 30000) {
-        console.log(`Extended OB: No activity for 30s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), reconnecting...`);
+      if (timeSinceMessage > 15000 && timeSincePong > 15000) {
+        console.log(`Extended OB: DEAD - no activity for 15s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
         clearInterval(extOBPingInterval);
+        exchangeSockets.delete('extended_orderbook');
         ws.terminate();
+        safeReconnectExtendedOB(500, 'ping-timeout');
       }
     }
   }, 10000); // Every 10s
+  ws._pingInterval = extOBPingInterval;
   
   ws.on('pong', () => {
     extOBLastPong = Date.now();
   });
   
   ws.on('error', (err) => {
+    if (exchangeSockets.get('extended_orderbook') !== ws) return;
     extendedOBReconnectAttempts++;
-    const errorDetails = {
-      message: err.message,
-      code: err.code,
-      errno: err.errno,
-      syscall: err.syscall,
-      address: err.address,
-      port: err.port
-    };
-    console.error(`Extended Orderbook: Error (attempt ${extendedOBReconnectAttempts})`, JSON.stringify(errorDetails));
     clearInterval(extOBPingInterval);
-    
-    if (err.message.includes('429')) {
-      console.log('Extended OB: Rate limited (429), trying next proxy immediately...');
-      ws.terminate();
-      setImmediate(connectExtendedOrderbook);
-      return;
-    }
-    
-    // For other errors, use backoff and reconnect
-    const backoff = getExtendedOBBackoff();
-    console.log(`Extended OB: Will retry in ${backoff}ms`);
+    console.error(`Extended Orderbook: Error (attempt ${extendedOBReconnectAttempts})`, err.message);
+    exchangeSockets.delete('extended_orderbook');
     ws.terminate();
-    setTimeout(() => connectExtendedOrderbook(), backoff);
+    if (err.message.includes('429')) {
+      safeReconnectExtendedOB(100, '429-rate-limit');
+    } else {
+      const delay = Math.min(500 * Math.pow(2, Math.min(extendedOBReconnectAttempts, 3)), 5000);
+      safeReconnectExtendedOB(delay, 'error');
+    }
   });
   
-  ws.on('close', (code, reason) => {
+  ws.on('close', (code) => {
+    if (exchangeSockets.get('extended_orderbook') !== ws) return;
     clearInterval(extOBPingInterval);
     extendedOBReconnectAttempts++;
-    
-    // Decode close code
-    const closeCodeMeaning = {
-      1000: 'Normal closure',
-      1001: 'Going away (server shutdown)',
-      1002: 'Protocol error',
-      1003: 'Unsupported data',
-      1005: 'No status received',
-      1006: 'Abnormal closure (connection lost)',
-      1007: 'Invalid payload',
-      1008: 'Policy violation',
-      1009: 'Message too big',
-      1010: 'Missing extension',
-      1011: 'Internal server error',
-      1012: 'Service restart',
-      1013: 'Try again later',
-      1015: 'TLS handshake failed'
-    };
-    const codeMeaning = closeCodeMeaning[code] || 'Unknown';
-    const reasonStr = reason ? reason.toString() : 'none';
-    
-    console.log(`Extended Orderbook: Disconnected (code=${code} [${codeMeaning}], reason=${reasonStr}, attempt ${extendedOBReconnectAttempts})`);
-    
-    const backoff = getExtendedOBBackoff();
-    console.log(`Extended OB: Will reconnect in ${backoff}ms with next proxy...`);
-    setTimeout(() => connectExtendedOrderbook(), backoff);
+    console.log(`Extended OB: Disconnected (code=${code}, attempt ${extendedOBReconnectAttempts})`);
+    exchangeSockets.delete('extended_orderbook');
+    const delay = Math.min(500 * Math.pow(2, Math.min(extendedOBReconnectAttempts, 3)), 5000);
+    safeReconnectExtendedOB(delay, 'close');
   });
   
   exchangeSockets.set('extended_orderbook', ws);
@@ -2252,7 +2273,7 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Heartbeat: log connection status every 30s and send ping to keep connections alive
+// Layer 3: Enhanced Heartbeat - 15s instead of 30s
 setInterval(() => {
   const status = [];
   const exchanges = ['lighter', 'extended', 'extended_orderbook', 'paradex', 'grvt', 'reya', 'pacifica'];
@@ -2261,12 +2282,7 @@ setInterval(() => {
     const ws = exchangeSockets.get(name);
     if (ws && ws.readyState === WebSocket.OPEN) {
       status.push(`${name}:OK`);
-      // Send ping to keep connection alive
-      try {
-        ws.ping();
-      } catch (e) {
-        // Ignore ping errors
-      }
+      try { ws.ping(); } catch (e) {}
     } else if (ws && ws.readyState === WebSocket.CONNECTING) {
       status.push(`${name}:CONNECTING`);
     } else {
@@ -2276,20 +2292,56 @@ setInterval(() => {
   
   console.log(`Heartbeat: ${status.join(', ')}`);
   
-  // Force reconnect dead connections
   for (const name of exchanges) {
     const ws = exchangeSockets.get(name);
     if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
       console.log(`Heartbeat: Forcing reconnect for ${name}`);
+      exchangeSockets.delete(name);
       if (name === 'lighter') connectLighter();
-      else if (name === 'extended') connectExtended();
-      else if (name === 'extended_orderbook') connectExtendedOrderbook();
+      else if (name === 'extended') safeReconnectExtended(200, 'heartbeat');
+      else if (name === 'extended_orderbook') safeReconnectExtendedOB(200, 'heartbeat');
       else if (name === 'paradex') connectParadex();
       else if (name === 'grvt') connectGrvt();
       else if (name === 'reya') connectReya();
       else if (name === 'pacifica') connectPacifica();
     }
   }
-}, 30000);
+}, 15000);
+
+// Layer 2: Data Activity Watchdog for Extended - checks every 20s
+let lastExtendedMsgCount = 0;
+let lastExtendedOBMsgCount = 0;
+setInterval(() => {
+  const currentExtended = msgCounters.extended;
+  const currentExtendedOB = msgCounters.extended_orderbook;
+  
+  const extDelta = currentExtended - lastExtendedMsgCount;
+  const extOBDelta = currentExtendedOB - lastExtendedOBMsgCount;
+  
+  if (extDelta === 0) {
+    const ws = exchangeSockets.get('extended');
+    console.log(`[WATCHDOG] Extended: 0 messages in 20s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
+    if (ws) {
+      if (ws._pingInterval) clearInterval(ws._pingInterval);
+      exchangeSockets.delete('extended');
+      try { ws.terminate(); } catch(e) {}
+    }
+    safeReconnectExtended(200, 'watchdog');
+  }
+  
+  if (extOBDelta === 0) {
+    const ws = exchangeSockets.get('extended_orderbook');
+    console.log(`[WATCHDOG] Extended OB: 0 messages in 20s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
+    if (ws) {
+      if (ws._pingInterval) clearInterval(ws._pingInterval);
+      exchangeSockets.delete('extended_orderbook');
+      try { ws.terminate(); } catch(e) {}
+    }
+    safeReconnectExtendedOB(200, 'watchdog');
+  }
+  
+  lastExtendedMsgCount = currentExtended;
+  lastExtendedOBMsgCount = currentExtendedOB;
+}, 20000);
 
 start();

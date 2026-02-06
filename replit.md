@@ -93,6 +93,16 @@ Supports format: `host:port:user:pass` which is converted to `http://user:pass@h
 ## Render Deployment
 See `server/RENDER_DEPLOY.md` for deployment guide.
 
+## Recent Changes (2026-02-06)
+- **3-layer Extended protection** for Render stability:
+  - **Layer 1**: Ping/pong keepalive for Extended (10s ping, 15s dead timeout → force reconnect)
+  - **Layer 2**: Data Activity Watchdog (20s) - monitors msgCounters, if 0 messages → kill + reconnect in 200ms
+  - **Layer 3**: Enhanced Heartbeat (15s instead of 30s) with force reconnect for dead connections
+- **safeReconnect deduplication**: `safeReconnectExtended()` and `safeReconnectExtendedOB()` prevent duplicate reconnect scheduling from multiple layers firing simultaneously
+- **Stale socket guards**: error/close handlers check `exchangeSockets.get() !== ws` to ignore events from old sockets
+- **Fast reconnect**: Extended 500ms delay (was 1s), Extended OB max backoff reduced from 30s to 5s
+- **Duplicate connection prevention**: All exchanges check CONNECTING/OPEN state before creating new connections
+
 ## Recent Changes (2026-02-05)
 - **Memory optimization for Render OOM**: Rozwiązano problem "Ran out of memory (512MB)" na Render
   - MAX_CACHE_SIZE zmniejszone z 500 na 200
