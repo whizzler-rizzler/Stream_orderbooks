@@ -897,8 +897,8 @@ function connectExtended() {
       try { ws.ping(); } catch(e) {}
       const timeSinceMessage = Date.now() - extLastMessage;
       const timeSincePong = Date.now() - extLastPong;
-      if (timeSinceMessage > 15000 && timeSincePong > 15000) {
-        console.log(`Extended: DEAD - no activity for 15s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
+      if (timeSinceMessage > 5000 && timeSincePong > 5000) {
+        console.log(`Extended: DEAD - no activity for 5s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
         clearInterval(extPingInterval);
         exchangeSockets.delete('extended');
         ws.terminate();
@@ -1142,8 +1142,8 @@ function connectExtendedOrderbook() {
       ws.ping();
       const timeSinceMessage = Date.now() - extOBLastMessage;
       const timeSincePong = Date.now() - extOBLastPong;
-      if (timeSinceMessage > 15000 && timeSincePong > 15000) {
-        console.log(`Extended OB: DEAD - no activity for 15s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
+      if (timeSinceMessage > 5000 && timeSincePong > 5000) {
+        console.log(`Extended OB: DEAD - no activity for 5s (msg: ${timeSinceMessage}ms, pong: ${timeSincePong}ms), force reconnect...`);
         clearInterval(extOBPingInterval);
         exchangeSockets.delete('extended_orderbook');
         ws.terminate();
@@ -2273,7 +2273,7 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Layer 3: Enhanced Heartbeat - 15s instead of 30s
+// Layer 3: Enhanced Heartbeat - 5s (react instantly before full disconnect)
 setInterval(() => {
   const status = [];
   const exchanges = ['lighter', 'extended', 'extended_orderbook', 'paradex', 'grvt', 'reya', 'pacifica'];
@@ -2306,9 +2306,9 @@ setInterval(() => {
       else if (name === 'pacifica') connectPacifica();
     }
   }
-}, 15000);
+}, 5000);
 
-// Layer 2: Data Activity Watchdog for Extended - checks every 20s
+// Layer 2: Data Activity Watchdog for Extended - checks every 5s (instant reaction)
 let lastExtendedMsgCount = 0;
 let lastExtendedOBMsgCount = 0;
 setInterval(() => {
@@ -2320,7 +2320,7 @@ setInterval(() => {
   
   if (extDelta === 0) {
     const ws = exchangeSockets.get('extended');
-    console.log(`[WATCHDOG] Extended: 0 messages in 20s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
+    console.log(`[WATCHDOG] Extended: 0 messages in 5s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
     if (ws) {
       if (ws._pingInterval) clearInterval(ws._pingInterval);
       exchangeSockets.delete('extended');
@@ -2331,7 +2331,7 @@ setInterval(() => {
   
   if (extOBDelta === 0) {
     const ws = exchangeSockets.get('extended_orderbook');
-    console.log(`[WATCHDOG] Extended OB: 0 messages in 20s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
+    console.log(`[WATCHDOG] Extended OB: 0 messages in 5s! State: ${ws ? ws.readyState : 'NO SOCKET'}, force reconnect...`);
     if (ws) {
       if (ws._pingInterval) clearInterval(ws._pingInterval);
       exchangeSockets.delete('extended_orderbook');
@@ -2342,6 +2342,6 @@ setInterval(() => {
   
   lastExtendedMsgCount = currentExtended;
   lastExtendedOBMsgCount = currentExtendedOB;
-}, 20000);
+}, 5000);
 
 start();
